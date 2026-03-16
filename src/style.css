@@ -297,6 +297,11 @@ body {
   border-color: var(--accent-red-soft);
 }
 
+.stat-card-clickable {
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
 .stat-value {
   font-family: var(--font-display);
   font-size: 2rem;

@@ -164,31 +164,39 @@ function renderPage(page) {
 // --- DASHBOARD ---
 function renderDashboard(container) {
   const periodo = getPeriodoActual(appData);
-  const socios = appData.socios || [];
-
-  let activos = 0, porVencer = 0, vencidos = 0;
+  const socios = (appData.socios || []).slice();
   socios.forEach(s => {
-    const sem = calcularSemaforo(s.ultimo_pago);
-    if (sem.estado === 'activo') activos++;
-    else if (sem.estado === 'por-vencer') porVencer++;
-    else vencidos++;
+    s._semaforo = calcularSemaforo(s.ultimo_pago);
   });
+
+  const activosList = socios.filter(s => s._semaforo.estado === 'activo');
+  const porVencerList = socios.filter(s => s._semaforo.estado === 'por-vencer');
+  const vencidosList = socios.filter(s => s._semaforo.estado === 'vencido');
 
   container.innerHTML = `
     <div class="card">
       <h2 class="card-title">Dashboard - Período ${periodo}</h2>
       <div class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-value">${activos}</div>
+        <div class="stat-card stat-card-clickable" data-filter="activo" title="Clic para ver listado">
+          <div class="stat-value">${activosList.length}</div>
           <div class="stat-label">Socios activos</div>
         </div>
-        <div class="stat-card">
-          <div class="stat-value">${porVencer}</div>
+        <div class="stat-card stat-card-clickable" data-filter="por-vencer" title="Clic para ver listado">
+          <div class="stat-value">${porVencerList.length}</div>
           <div class="stat-label">Vencen en 7 días</div>
         </div>
-        <div class="stat-card">
-          <div class="stat-value">${vencidos}</div>
+        <div class="stat-card stat-card-clickable" data-filter="vencido" title="Clic para ver listado">
+          <div class="stat-value">${vencidosList.length}</div>
           <div class="stat-label">Vencidos</div>
+        </div>
+      </div>
+      <div id="dashboard-listado" class="dashboard-listado" style="display: none; margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border);">
+        <h4 id="dashboard-listado-titulo" style="margin-bottom: 1rem; color: var(--text-secondary);"></h4>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Nombre</th><th>Teléfono</th><th>Actividad</th><th>Último pago</th><th>Monto</th></tr></thead>
+            <tbody id="dashboard-listado-tbody"></tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -204,6 +212,44 @@ function renderDashboard(container) {
       </ul>
     </div>
   `;
+
+  const listados = {
+    activo: { titulo: 'Socios al día', lista: activosList },
+    'por-vencer': { titulo: 'Vencen en 7 días', lista: porVencerList },
+    vencido: { titulo: 'Socios vencidos', lista: vencidosList }
+  };
+
+  const panelListado = container.querySelector('#dashboard-listado');
+  const tituloListado = container.querySelector('#dashboard-listado-titulo');
+  const tbodyListado = container.querySelector('#dashboard-listado-tbody');
+
+  function mostrarListado(filter) {
+    const { titulo, lista } = listados[filter] || {};
+    if (!lista) return;
+    tituloListado.textContent = titulo + ` (${lista.length})`;
+    tbodyListado.innerHTML = lista.map(s => `
+      <tr>
+        <td>${s.nombre}</td>
+        <td>${s.telefono || '-'}</td>
+        <td>${s.actividad || '-'}</td>
+        <td>${formatDate(s.ultimo_pago)}</td>
+        <td>${formatMoney(s.monto)}</td>
+      </tr>
+    `).join('');
+    const yaVisible = panelListado.style.display !== 'none';
+    const mismoFiltro = panelListado.dataset.actualFilter === filter;
+    if (yaVisible && mismoFiltro) {
+      panelListado.style.display = 'none';
+      panelListado.dataset.actualFilter = '';
+    } else {
+      panelListado.style.display = 'block';
+      panelListado.dataset.actualFilter = filter;
+    }
+  }
+
+  container.querySelectorAll('.stat-card-clickable').forEach(card => {
+    card.addEventListener('click', () => mostrarListado(card.dataset.filter));
+  });
 }
 
 // --- SOCIOS ---
