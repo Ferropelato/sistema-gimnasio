@@ -41,12 +41,38 @@ c:\Users\Fernando\Desktop\curso desarrollador\gimnasio
 2. Usá un servidor que sirva la carpeta `dist` (ej: `npx serve dist`)
 3. En el celular, conectado a la misma red, abrí la IP mostrada
 
-## Datos
+## Datos (Firebase Realtime Database)
 
-- Los datos se guardan en **localStorage** del navegador y persisten al cerrar
+- Los datos se guardan en **Firebase** y se sincronizan entre todas las PCs/dispositivos
+- Si Firebase no está disponible, se usa localStorage como respaldo
 - **Exportar**: descargá un backup JSON (botón 📤) para guardarlo en tu PC
-- **Importar**: restauramos desde un archivo JSON (botón 📥) si borraste caché o cambiás de dispositivo
-- **Recomendación**: exportá un backup cada semana o antes de limpiar el navegador
+- **Importar**: restauramos desde un archivo JSON (botón 📥)
+
+### Reglas de Firebase Realtime Database
+
+En Firebase Console → Realtime Database → Reglas, usá:
+
+```json
+{
+  "rules": {
+    "gym": {
+      ".read": true,
+      ".write": true
+    }
+  }
+}
+```
+
+Para producción, considerá restringir con autenticación.
+
+## Deploy (obtener link público)
+
+1. Instalá Vercel CLI: `npm i -g vercel`
+2. Iniciá sesión: `vercel login` (te abre el navegador)
+3. Deploy: `vercel --prod`
+4. Te dará un link como: `https://gimnasio-xxx.vercel.app`
+
+Alternativa sin CLI: subí el proyecto a [vercel.com](https://vercel.com) conectando tu repo de GitHub.
 
 ## Contraseña Finanzas
 

@@ -3,7 +3,7 @@
  * Punto de entrada principal
  */
 
-import { loadData, saveData, getPeriodoActual } from './storage.js';
+import { loadData, saveData, getPeriodoActual, subscribeToDataUpdates } from './storage.js';
 import { calcularSemaforo, formatMoney, formatDate, getRangoPeriodo15, fechaEnPeriodo15, diasDesdePago, diasRestantes, getPeriodoDesdeFecha } from './utils.js';
 import { isAdminAutenticado, setAdminAutenticado, verificarClave, filtrarPorPeriodo15, getPeriodosDisponibles } from './finanzas.js';
 
@@ -24,6 +24,14 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
 async function init() {
   appData = await loadData();
   renderPage('dashboard');
+
+  // Actualización en tiempo real desde Firebase (cuando otra PC modifica)
+  subscribeToDataUpdates((data) => {
+    appData = data;
+    const activeBtn = document.querySelector('.nav-btn.active');
+    const page = activeBtn?.dataset?.page || 'dashboard';
+    renderPage(page);
+  });
 
   // Botón guardar manual
   document.getElementById('btn-guardar')?.addEventListener('click', () => {
@@ -123,6 +131,9 @@ function renderPage(page) {
     case 'actividades':
       renderActividades(container);
       break;
+    case 'horarios':
+      renderHorarios(container);
+      break;
     case 'admin':
       renderAdmin(container);
       break;
@@ -153,13 +164,6 @@ function renderPage(page) {
 function renderDashboard(container) {
   const periodo = getPeriodoActual(appData);
   const socios = appData.socios || [];
-  const cuotas = appData.cuotas || [];
-  const ventas = appData.ventas || [];
-
-  const cuotasPeriodo = cuotas.filter(c => c.periodo === periodo);
-  const ventasPeriodo = ventas.filter(v => v.periodo === periodo);
-  const ingresosCuotas = cuotasPeriodo.reduce((s, c) => s + (c.monto || 0), 0);
-  const ingresosVentas = ventasPeriodo.reduce((s, v) => s + (v.cantidad || 1) * (v.precio || 0), 0);
 
   let activos = 0, porVencer = 0, vencidos = 0;
   socios.forEach(s => {
@@ -185,14 +189,6 @@ function renderDashboard(container) {
           <div class="stat-value">${vencidos}</div>
           <div class="stat-label">Vencidos</div>
         </div>
-        <div class="stat-card">
-          <div class="stat-value">${formatMoney(ingresosCuotas)}</div>
-          <div class="stat-label">Ingresos cuotas</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value">${formatMoney(ingresosVentas)}</div>
-          <div class="stat-label">Ingresos ventas</div>
-        </div>
       </div>
     </div>
 
@@ -202,6 +198,7 @@ function renderDashboard(container) {
         <li style="margin-bottom: 0.5rem;">• <strong>Socios:</strong> Ver listado con semáforo (verde/amarillo/rojo)</li>
         <li style="margin-bottom: 0.5rem;">• <strong>Cuotas:</strong> Registrar pagos y renovaciones</li>
         <li style="margin-bottom: 0.5rem;">• <strong>Ventas:</strong> Productos y bebidas (descuenta stock)</li>
+        <li style="margin-bottom: 0.5rem;">• <strong>Horarios:</strong> Grilla semanal L-S 7-22hs, arrastrar actividades y cupo</li>
         <li style="margin-bottom: 0.5rem;">• <strong>Acceso Huella:</strong> Simulador para futuro lector de huella</li>
       </ul>
     </div>
@@ -1515,6 +1512,207 @@ function renderActividades(container) {
       }
     });
   });
+}
+
+// --- HORARIOS (grilla semanal) ---
+const DIAS_SEMANA = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+const HORA_INICIO = 7;
+const HORA_FIN = 22;
+
+function getHorarioSlot(horario, dia, hora) {
+  return (horario || []).find(h => h.dia === dia && h.hora === hora);
+}
+
+function renderHorarios(container) {
+  if (!appData.horario) appData.horario = [];
+  const horario = appData.horario;
+  const actividades = appData.actividades || [];
+  const horas = [];
+  for (let h = HORA_INICIO; h < HORA_FIN; h++) horas.push(h);
+
+  container.innerHTML = `
+    <div class="card">
+      <h2 class="card-title">Grilla de horarios - Lunes a Sábado 7:00 - 22:00</h2>
+      <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+        Arrastrá una actividad desde la lista o hacé clic en un horario para agregar/editar. Cupo = máx. de personas.
+      </p>
+      <div class="horarios-layout">
+        <div class="horarios-grid-wrap">
+          <table class="horarios-grid">
+            <thead>
+              <tr>
+                <th class="horarios-hora">Hora</th>
+                ${DIAS_SEMANA.map(d => `<th>${d}</th>`).join('')}
+              </tr>
+            </thead>
+            <tbody>
+              ${horas.map(hora => `
+                <tr>
+                  <td class="horarios-hora">${hora}:00</td>
+                  ${DIAS_SEMANA.map((_, dia) => {
+                    const slot = getHorarioSlot(horario, dia, hora);
+                    return `
+                      <td class="horarios-slot" data-dia="${dia}" data-hora="${hora}">
+                        ${slot ? `
+                          <div class="slot-actividad" data-id="${slot.id}">
+                            <strong>${slot.actividad}</strong>
+                            ${slot.cupo ? `<span class="slot-cupo">Cupo: ${slot.cupo}</span>` : ''}
+                            <button type="button" class="btn-slot-del" title="Quitar">×</button>
+                          </div>
+                        ` : '<span class="slot-vacio">—</span>'}
+                      </td>
+                    `;
+                  }).join('')}
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+        <div class="horarios-sidebar">
+          <h4 style="margin-bottom: 0.75rem; color: var(--text-secondary);">Actividades (arrastrar)</h4>
+          <div class="actividades-flotantes" id="actividades-flotantes">
+            ${actividades.map(a => `
+              <div class="actividad-chip" draggable="true" data-actividad="${a.nombre}">
+                ${a.nombre}
+              </div>
+            `).join('')}
+          </div>
+          <div class="form-group" style="margin-top: 1rem;">
+            <label>Escribir actividad nueva</label>
+            <div style="display: flex; gap: 0.5rem;">
+              <input type="text" id="nueva-actividad-nombre" placeholder="Ej: Yoga, Pilates" />
+              <button type="button" class="btn btn-secondary btn-sm" id="nueva-actividad-add">+</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // Drag: actividades flotantes
+  const flotantes = container.querySelectorAll('.actividad-chip');
+  flotantes.forEach(chip => {
+    chip.addEventListener('dragstart', (e) => {
+      e.dataTransfer.setData('text/plain', chip.dataset.actividad);
+      e.dataTransfer.effectAllowed = 'copy';
+      chip.classList.add('dragging');
+    });
+    chip.addEventListener('dragend', () => chip.classList.remove('dragging'));
+  });
+
+  // Drop: slots
+  container.querySelectorAll('.horarios-slot').forEach(slot => {
+    slot.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      slot.classList.add('drop-over');
+    });
+    slot.addEventListener('dragleave', () => slot.classList.remove('drop-over'));
+    slot.addEventListener('drop', (e) => {
+      e.preventDefault();
+      slot.classList.remove('drop-over');
+      const actividad = e.dataTransfer.getData('text/plain');
+      if (!actividad) return;
+      abrirModalSlotActividad(parseInt(slot.dataset.dia, 10), parseInt(slot.dataset.hora, 10), actividad);
+    });
+    slot.addEventListener('click', (e) => {
+      if (e.target.closest('.btn-slot-del')) return;
+      const dia = parseInt(slot.dataset.dia, 10);
+      const hora = parseInt(slot.dataset.hora, 10);
+      const existing = getHorarioSlot(horario, dia, hora);
+      abrirModalSlotActividad(dia, hora, existing?.actividad || '');
+    });
+  });
+
+  // Botón eliminar en slot
+  container.querySelectorAll('.btn-slot-del').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const id = btn.closest('.slot-actividad')?.dataset?.id;
+      if (id) {
+        appData.horario = appData.horario.filter(h => h.id !== id);
+        saveData(appData);
+        renderPage('horarios');
+      }
+    });
+  });
+
+  // Agregar actividad nueva
+  const inputNueva = container.querySelector('#nueva-actividad-nombre');
+  container.querySelector('#nueva-actividad-add')?.addEventListener('click', () => {
+    const nom = inputNueva?.value?.trim();
+    if (!nom) return;
+    if (!appData.actividades.some(a => a.nombre === nom)) {
+      appData.actividades.push({ nombre: nom, profesor: '', porcentaje_profesor: 0, observacion: '', aplica_pago: 'No' });
+      saveData(appData);
+      renderPage('horarios');
+    }
+    inputNueva.value = '';
+  });
+
+  function abrirModalSlotActividad(dia, hora, actividadNombre) {
+    const existing = getHorarioSlot(horario, dia, hora);
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.innerHTML = `
+      <div class="modal">
+        <div class="modal-header">
+          <h3>${DIAS_SEMANA[dia]} ${hora}:00</h3>
+          <button type="button" class="btn-cerrar" aria-label="Cerrar">&times;</button>
+        </div>
+        <form id="form-slot-actividad" class="modal-body">
+          <div class="form-group">
+            <label>Actividad</label>
+            <input type="text" id="slot-actividad" value="${actividadNombre || ''}" list="actividades-horario-list" placeholder="Nombre de la actividad" />
+            <datalist id="actividades-horario-list">${actividades.map(a => `<option value="${a.nombre}">`).join('')}</datalist>
+          </div>
+          <div class="form-group">
+            <label>Cupo (máx. personas)</label>
+            <input type="number" id="slot-cupo" value="${existing?.cupo || ''}" min="1" placeholder="Ej: 15" />
+          </div>
+          <div class="modal-footer" style="margin-top: 1rem;">
+            <button type="button" class="btn btn-secondary" id="slot-actividad-borrar">Quitar</button>
+            <button type="submit" class="btn btn-primary">Guardar</button>
+          </div>
+        </form>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    modal.querySelector('.btn-cerrar').onclick = () => modal.remove();
+    modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+
+    modal.querySelector('#form-slot-actividad').onsubmit = (e) => {
+      e.preventDefault();
+      const actividad = modal.querySelector('#slot-actividad').value.trim();
+      const cupo = parseInt(modal.querySelector('#slot-cupo').value, 10) || null;
+      if (!actividad) {
+        modal.remove();
+        return;
+      }
+      if (existing) {
+        existing.actividad = actividad;
+        existing.cupo = cupo;
+      } else {
+        appData.horario.push({
+          id: 'hor' + Date.now(),
+          dia,
+          hora,
+          actividad,
+          cupo
+        });
+      }
+      saveData(appData);
+      modal.remove();
+      renderPage('horarios');
+    };
+
+    modal.querySelector('#slot-actividad-borrar').onclick = () => {
+      if (existing) appData.horario = appData.horario.filter(h => h.id !== existing.id);
+      saveData(appData);
+      modal.remove();
+      renderPage('horarios');
+    };
+  }
 }
 
 // --- ACCESO HUELLA ---
