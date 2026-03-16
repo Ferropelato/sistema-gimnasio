@@ -81,6 +81,14 @@ Vercel detecta el push y redeploya en ~1 min.
 
 **Firebase:** Agregá el dominio de Vercel en Firebase Console → Configuración → Dominios autorizados (ej: `*.vercel.app`).
 
+## Lector de huella R307/R503
+
+**Requisitos:** Chrome, HTTPS o localhost, lector conectado por USB.
+
+1. **Registrar huella:** Socios → botón 👆 en el socio → Conectar lector → Registrar (2 pasos). Apoyá el dedo 2 veces; si coinciden, se guarda.
+2. **Verificar acceso:** Acceso Huella → Conectar lector → escaneá la huella. Se muestra el semáforo (verde/amarillo/rojo).
+3. **Modo teclado:** Si el lector emula teclado y envía el ID al escanear, escribí el ID en el campo de búsqueda o escaneá directo.
+
 ## Contraseña Finanzas
 
 Por defecto: `admin`. Cambiala en Configuración.

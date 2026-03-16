@@ -4,6 +4,7 @@
  */
 
 import { loadData, saveData, getPeriodoActual, subscribeToDataUpdates } from './storage.js';
+import * as fingerprint from './fingerprint.js';
 import { calcularSemaforo, formatMoney, formatDate, getRangoPeriodo15, fechaEnPeriodo15, diasDesdePago, diasRestantes, getPeriodoDesdeFecha } from './utils.js';
 import { isAdminAutenticado, setAdminAutenticado, verificarClave, filtrarPorPeriodo15, getPeriodosDisponibles } from './finanzas.js';
 
@@ -199,7 +200,7 @@ function renderDashboard(container) {
         <li style="margin-bottom: 0.5rem;">• <strong>Cuotas:</strong> Registrar pagos y renovaciones</li>
         <li style="margin-bottom: 0.5rem;">• <strong>Ventas:</strong> Productos y bebidas (descuenta stock)</li>
         <li style="margin-bottom: 0.5rem;">• <strong>Horarios:</strong> Grilla semanal L-S 7-22hs, arrastrar actividades y cupo</li>
-        <li style="margin-bottom: 0.5rem;">• <strong>Acceso Huella:</strong> Simulador para futuro lector de huella</li>
+        <li style="margin-bottom: 0.5rem;">• <strong>Acceso Huella:</strong> DNI, nombre o lector R307. Registrar huella en Socios (botón 👆)</li>
       </ul>
     </div>
   `;
@@ -336,6 +337,7 @@ function renderSocios(container) {
         <td>${formatMoney(s.monto)}</td>
         <td class="acciones-socio">
           <button type="button" class="btn btn-secondary btn-sm" data-editar="${s.id}" title="Editar ficha">✏️</button>
+          <button type="button" class="btn btn-secondary btn-sm" data-huella="${s.id}" title="Registrar huella">👆</button>
           ${(s.telefono || '').replace(/\D/g, '').length >= 10 ? `<a href="${urlWhatsApp(s)}" target="_blank" class="btn btn-secondary btn-sm" title="Enviar WhatsApp">📱</a>` : ''}
         </td>
       </tr>
@@ -343,6 +345,8 @@ function renderSocios(container) {
     list.forEach(s => {
       const btnEditar = tbody.querySelector(`[data-editar="${s.id}"]`);
       if (btnEditar) btnEditar.addEventListener('click', () => abrirModalEditarSocio(s));
+      const btnHuella = tbody.querySelector(`[data-huella="${s.id}"]`);
+      if (btnHuella) btnHuella.addEventListener('click', () => abrirModalRegistrarHuella(s));
     });
   }
 
@@ -449,6 +453,10 @@ function abrirModalEditarSocio(socio) {
             <label>Monto</label>
             <input type="number" name="monto" value="${socio.monto || ''}" />
           </div>
+          <div class="form-group">
+            <label>ID Huella (lector R307)</label>
+            <input type="number" name="huella_id" value="${socio.huella_id ?? ''}" placeholder="0-999" min="0" max="999" />
+          </div>
           <div class="form-group" style="grid-column: 1 / -1;">
             <label>Observaciones / Contacto emergencia</label>
             <textarea name="observaciones" rows="2">${socio.observaciones || ''}</textarea>
@@ -521,11 +529,91 @@ function abrirModalEditarSocio(socio) {
     socio.dias_semana = form.dias_semana?.value?.trim() || '';
     socio.planilla_deslinde = form.planilla_deslinde?.checked || false;
     socio.planilla_medica = form.planilla_medica?.checked || false;
+    const hid = parseInt(form.querySelector('[name="huella_id"]')?.value, 10);
+    socio.huella_id = (hid >= 0 && hid <= 999) ? hid : undefined;
     socio.monto = parseInt(form.monto.value, 10) || 0;
     socio.observaciones = form.observaciones.value.trim();
     saveData(appData);
     modal.remove();
     renderPage('socios');
+  };
+}
+
+async function abrirModalRegistrarHuella(socio) {
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay';
+  const huellaIdsUsados = (appData.socios || []).map(s => s.huella_id).filter(id => id != null && id !== socio.huella_id);
+  const proximoId = socio.huella_id ?? (Array.from({ length: 1000 }, (_, i) => i).find(i => !huellaIdsUsados.includes(i)) ?? 0);
+
+  modal.innerHTML = `
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Registrar huella: ${socio.nombre}</h3>
+        <button type="button" class="btn-cerrar" aria-label="Cerrar">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+          Conectá el lector R307/R503 por USB. El lector capturará la huella 2 veces para validar que coincidan.
+        </p>
+        <div id="huella-status" style="padding: 1rem; background: var(--bg-card); border-radius: 6px; margin-bottom: 1rem;">
+          Estado: Desconectado
+        </div>
+        <div style="display: flex; gap: 1rem; flex-wrap: wrap;">
+          <button type="button" class="btn btn-primary" id="btn-conectar-huella">Conectar lector</button>
+          <button type="button" class="btn btn-primary" id="btn-registrar-huella" disabled>Registrar (2 pasos)</button>
+        </div>
+        <p style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 1rem;">
+          ID asignado: <strong>${proximoId}</strong> (se guarda en el socio)
+        </p>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  modal.querySelector('.btn-cerrar').onclick = () => modal.remove();
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+
+  const statusEl = modal.querySelector('#huella-status');
+  const btnConectar = modal.querySelector('#btn-conectar-huella');
+  const btnRegistrar = modal.querySelector('#btn-registrar-huella');
+
+  const actualizarEstado = (msg) => { statusEl.textContent = 'Estado: ' + msg; };
+
+  btnConectar.onclick = async () => {
+    btnConectar.disabled = true;
+    actualizarEstado('Conectando...');
+    try {
+      if (fingerprint.isSerialSupported()) {
+        await fingerprint.connect();
+        actualizarEstado('Conectado. Listo para registrar.');
+        btnRegistrar.disabled = false;
+      } else {
+        actualizarEstado('Web Serial no disponible. Usá Chrome con HTTPS.');
+      }
+    } catch (e) {
+      actualizarEstado('Error: ' + (e.message || e));
+      btnConectar.disabled = false;
+    }
+  };
+
+  btnRegistrar.onclick = async () => {
+    btnRegistrar.disabled = true;
+    actualizarEstado('Apoyá el dedo (1ra vez)...');
+    try {
+      const result = await fingerprint.enroll(proximoId);
+      if (result.error) {
+        actualizarEstado(result.error);
+        btnRegistrar.disabled = false;
+        return;
+      }
+      socio.huella_id = result.pageId;
+      saveData(appData);
+      actualizarEstado('¡Huella registrada correctamente!');
+      mostrarToast('Huella de ' + socio.nombre + ' registrada');
+      setTimeout(() => { modal.remove(); renderPage('socios'); }, 1500);
+    } catch (e) {
+      actualizarEstado('Error: ' + (e.message || e));
+      btnRegistrar.disabled = false;
+    }
   };
 }
 
@@ -1780,17 +1868,20 @@ function renderHorarios(container) {
 
 // --- ACCESO HUELLA ---
 function renderAccesoHuella(container) {
-  const periodo = getPeriodoActual(appData);
   const socios = appData.socios || [];
 
   container.innerHTML = `
     <div class="card">
       <h2 class="card-title">Acceso por huella o DNI</h2>
       <p style="color: var(--text-secondary); margin-bottom: 1rem;">
-        Buscá por nombre o DNI para ver el semáforo de estado. Futuro: lector de huella USB.
+        Buscá por nombre o DNI. Si tenés lector R307 conectado, hacé clic en "Conectar" y escaneá la huella.
       </p>
       <div class="form-group">
-        <input type="text" id="huella-buscar" placeholder="Nombre o DNI del socio..." autofocus />
+        <input type="text" id="huella-buscar" placeholder="Nombre, DNI o escaneá huella (ID)..." autofocus />
+      </div>
+      <div style="margin-top: 1rem;">
+        <button type="button" class="btn btn-secondary" id="btn-conectar-acceso">Conectar lector R307</button>
+        <span id="acceso-lector-status" style="margin-left: 0.5rem; color: var(--text-secondary);"></span>
       </div>
     </div>
 
@@ -1800,9 +1891,6 @@ function renderAccesoHuella(container) {
         <span id="semaforo-texto">Sin datos</span>
       </div>
       <p id="semaforo-detail" style="color: var(--text-secondary); margin-top: 1rem;"></p>
-      <p style="color: var(--text-secondary); font-size: 0.85rem; margin-top: 2rem; max-width: 400px; text-align: center;">
-        <strong>Futuro:</strong> Con un lector de huella USB, al escanear se buscará el socio y se mostrará este semáforo en pantalla grande. Verde = puede pasar, Rojo = debe regularizar.
-      </p>
     </div>
   `;
 
@@ -1810,6 +1898,25 @@ function renderAccesoHuella(container) {
   const semGrande = document.getElementById('semaforo-grande');
   const semTexto = document.getElementById('semaforo-texto');
   const semDetail = document.getElementById('semaforo-detail');
+  const btnConectar = document.getElementById('btn-conectar-acceso');
+  const statusLector = document.getElementById('acceso-lector-status');
+
+  function buscarSocio(q) {
+    const qTrim = (q || '').trim();
+    if (qTrim.length < 1) return null;
+    const qNum = parseInt(qTrim, 10);
+    if (!isNaN(qNum)) {
+      const porHuella = socios.find(s => s.huella_id === qNum);
+      if (porHuella) return porHuella;
+      const porDni = socios.find(s => (s.dni || '').toString() === qTrim);
+      if (porDni) return porDni;
+    }
+    const qLower = qTrim.toLowerCase();
+    return socios.find(s =>
+      (s.nombre || '').toLowerCase().includes(qLower) ||
+      (s.dni || '').toString().includes(qTrim)
+    ) || null;
+  }
 
   function actualizarSemaforo(socio) {
     if (!socio) {
@@ -1825,19 +1932,51 @@ function renderAccesoHuella(container) {
   }
 
   input.addEventListener('input', () => {
-    const q = input.value.trim();
-    if (q.length < 2) {
-      actualizarSemaforo(null);
+    const encontrado = buscarSocio(input.value);
+    actualizarSemaforo(encontrado);
+  });
+
+  input.addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+      const encontrado = buscarSocio(input.value);
+      actualizarSemaforo(encontrado);
+    }
+  });
+
+  let intervaloVerify = null;
+  btnConectar.onclick = async () => {
+    if (intervaloVerify) {
+      clearInterval(intervaloVerify);
+      intervaloVerify = null;
+      statusLector.textContent = '';
+      btnConectar.textContent = 'Conectar lector R307';
       return;
     }
-    const qLower = q.toLowerCase();
-    const encontrado = socios.find(s =>
-      (s.nombre || '').toLowerCase().includes(qLower) ||
-      (s.dni || '').toString() === q ||
-      (s.dni || '').toString().includes(q)
-    );
-    actualizarSemaforo(encontrado || null);
-  });
+    try {
+      if (!fingerprint.isSerialSupported()) {
+        statusLector.textContent = 'Web Serial no disponible (Chrome + HTTPS)';
+        return;
+      }
+      statusLector.textContent = 'Conectando...';
+      await fingerprint.connect();
+      statusLector.textContent = 'Conectado. Escaneá huella.';
+      btnConectar.textContent = 'Desconectar lector';
+      intervaloVerify = setInterval(async () => {
+        try {
+          const result = await fingerprint.verify();
+          if (result && result.pageId != null) {
+            const socio = socios.find(s => s.huella_id === result.pageId);
+            if (socio) {
+              actualizarSemaforo(socio);
+              input.value = '';
+            }
+          }
+        } catch (_) {}
+      }, 1500);
+    } catch (e) {
+      statusLector.textContent = 'Error: ' + (e.message || e);
+    }
+  };
 }
 
 // --- MÉTRICAS ---
