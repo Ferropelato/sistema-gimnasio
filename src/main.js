@@ -894,6 +894,7 @@ function renderStock(container) {
               <th>Precio</th>
               <th>Stock actual</th>
               <th>Valor</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -904,6 +905,7 @@ function renderStock(container) {
                 <td>${formatMoney(s.precio)}</td>
                 <td>${s.stock_actual ?? s.stock_inicial ?? 0}</td>
                 <td>${formatMoney((s.stock_actual ?? s.stock_inicial ?? 0) * (s.precio || 0))}</td>
+                <td><button type="button" class="btn btn-secondary btn-sm" data-edit-stock="${s.producto}">Editar</button></td>
               </tr>
             `).join('')}
           </tbody>
@@ -947,6 +949,67 @@ function renderStock(container) {
       renderPage('stock');
     }
   });
+
+  container.querySelectorAll('[data-edit-stock]').forEach(btn => {
+    btn.addEventListener('click', () => abrirModalEditarStock(stock.find(s => s.producto === btn.dataset.editStock)));
+  });
+}
+
+function abrirModalEditarStock(item) {
+  if (!item) return;
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay';
+  modal.innerHTML = `
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Editar: ${item.producto}</h3>
+        <button type="button" class="btn-cerrar" aria-label="Cerrar">&times;</button>
+      </div>
+      <form id="form-editar-stock" class="modal-body">
+        <div class="form-group">
+          <label>Nombre</label>
+          <input type="text" id="edit-stock-nombre" value="${item.producto}" required />
+        </div>
+        <div class="form-group">
+          <label>Categoría</label>
+          <select id="edit-stock-categoria">
+            ${CATEGORIAS_PRODUCTO.map(c => `<option value="${c}" ${c === (item.categoria || 'Bebida') ? 'selected' : ''}>${c}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Precio</label>
+          <input type="number" id="edit-stock-precio" value="${item.precio || 0}" min="0" />
+        </div>
+        <div class="form-group">
+          <label>Stock actual (cantidad real en depósito)</label>
+          <input type="number" id="edit-stock-actual" value="${item.stock_actual ?? item.stock_inicial ?? 0}" min="0" />
+        </div>
+        <div class="modal-footer" style="margin-top: 1rem;">
+          <button type="submit" class="btn btn-primary">Guardar</button>
+        </div>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  modal.querySelector('.btn-cerrar').onclick = () => modal.remove();
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+
+  modal.querySelector('#form-editar-stock').onsubmit = (e) => {
+    e.preventDefault();
+    const nuevoNombre = modal.querySelector('#edit-stock-nombre').value.trim();
+    const otroConMismoNombre = appData.stock.find(s => s.producto !== item.producto && s.producto === nuevoNombre);
+    if (otroConMismoNombre) {
+      mostrarToast('Ya existe otro producto con ese nombre');
+      return;
+    }
+    item.producto = nuevoNombre;
+    item.categoria = modal.querySelector('#edit-stock-categoria').value;
+    item.precio = parseInt(modal.querySelector('#edit-stock-precio').value, 10) || 0;
+    item.stock_actual = parseInt(modal.querySelector('#edit-stock-actual').value, 10) || 0;
+    saveData(appData);
+    modal.remove();
+    renderPage('stock');
+  };
 }
 
 // --- PROFESORES ---
