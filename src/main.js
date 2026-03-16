@@ -22,8 +22,20 @@ document.querySelectorAll('.nav-btn').forEach(btn => {
   });
 });
 
+function actualizarFechaHeader() {
+  const el = document.getElementById('header-fecha');
+  if (el) {
+    const d = new Date();
+    const dias = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+    const meses = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+    el.textContent = `${dias[d.getDay()]} ${d.getDate()} de ${meses[d.getMonth()]} ${d.getFullYear()}`;
+  }
+}
+
 async function init() {
   appData = await loadData();
+  actualizarFechaHeader();
+  setInterval(actualizarFechaHeader, 60000);
   renderPage('dashboard');
 
   // Actualización en tiempo real desde Firebase (cuando otra PC modifica)
@@ -677,17 +689,14 @@ function renderCuotas(container) {
     if (!acts.length && s.actividad) alumnosPorActividad[s.actividad] = (alumnosPorActividad[s.actividad] || 0) + 1;
   });
 
-  const montoPorActividad = {};
-  cuotas.forEach(c => {
-    const acts = (c.actividad || '').split(',').map(a => a.trim()).filter(Boolean);
-    if (acts.length) acts.forEach(act => { montoPorActividad[act] = (montoPorActividad[act] || 0) + (c.monto || 0); });
-    else if (c.actividad) montoPorActividad[c.actividad] = (montoPorActividad[c.actividad] || 0) + (c.monto || 0);
-  });
-
   let html = `
     <div class="card">
       <h2 class="card-title">Registrar pago de cuota</h2>
       <form id="form-cuota">
+        <div class="form-group">
+          <label>Fecha del pago</label>
+          <input type="date" id="cuota-fecha" value="${new Date().toISOString().slice(0, 10)}" />
+        </div>
         <div class="form-group">
           <label>Socio</label>
           <select id="cuota-socio" required>
@@ -731,11 +740,11 @@ function renderCuotas(container) {
       <h3 class="card-title">Resumen por actividad (período ${periodo})</h3>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Actividad</th><th>Alumnos</th><th>Abonado</th></tr></thead>
+          <thead><tr><th>Actividad</th><th>Alumnos</th></tr></thead>
           <tbody>
             ${(() => {
-              const acts = actividades.length ? actividades.map(a => a.nombre) : [...new Set([...Object.keys(alumnosPorActividad), ...Object.keys(montoPorActividad)])];
-              return acts.map(nom => `<tr><td>${nom}</td><td>${alumnosPorActividad[nom] ?? 0}</td><td>${formatMoney(montoPorActividad[nom] ?? 0)}</td></tr>`).join('');
+              const acts = actividades.length ? actividades.map(a => a.nombre) : [...new Set(Object.keys(alumnosPorActividad))];
+              return acts.map(nom => `<tr><td>${nom}</td><td>${alumnosPorActividad[nom] ?? 0}</td></tr>`).join('');
             })()}
           </tbody>
         </table>
@@ -744,7 +753,7 @@ function renderCuotas(container) {
         <label>Filtrar por actividad</label>
         <select id="cuota-filtro-actividad">
           <option value="">Todas</option>
-          ${(actividades.length ? actividades.map(a => a.nombre) : Object.keys(montoPorActividad)).map(nom => `<option value="${nom}">${nom}</option>`).join('')}
+          ${(actividades.length ? actividades.map(a => a.nombre) : Object.keys(alumnosPorActividad)).map(nom => `<option value="${nom}">${nom}</option>`).join('')}
         </select>
       </div>
     </div>
@@ -763,11 +772,13 @@ function renderCuotas(container) {
               <th>Pago prof.</th>
               <th>Método</th>
               <th>Tipo</th>
+              <th></th>
             </tr>
           </thead>
           <tbody id="cuota-tbody">
             ${cuotas.slice(-50).reverse().map(c => {
               const rest = diasRestantes(c.fecha);
+              const idx = appData.cuotas.findIndex(x => x === c);
               return `
               <tr>
                 <td>${formatDate(c.fecha)}</td>
@@ -778,6 +789,7 @@ function renderCuotas(container) {
                 <td>${c.pago_profesor ? formatMoney(c.pago_profesor) + ' (' + (c.profesor_nombre || '') + ')' : '-'}</td>
                 <td>${c.metodo || '-'}</td>
                 <td>${c.tipo || '-'}</td>
+                <td><button type="button" class="btn btn-secondary btn-sm" data-editar-cuota="${idx}" title="Editar fecha">✏️</button></td>
               </tr>
             `}).join('')}
           </tbody>
@@ -797,6 +809,7 @@ function renderCuotas(container) {
     const tbody = document.getElementById('cuota-tbody');
     if (tbody) tbody.innerHTML = list.map(c => {
       const rest = diasRestantes(c.fecha);
+      const idx = appData.cuotas.findIndex(x => x === c);
       return `
         <tr>
           <td>${formatDate(c.fecha)}</td>
@@ -807,10 +820,15 @@ function renderCuotas(container) {
           <td>${c.pago_profesor ? formatMoney(c.pago_profesor) + ' (' + (c.profesor_nombre || '') + ')' : '-'}</td>
           <td>${c.metodo || '-'}</td>
           <td>${c.tipo || '-'}</td>
+          <td><button type="button" class="btn btn-secondary btn-sm" data-editar-cuota="${idx}" title="Editar fecha">✏️</button></td>
         </tr>
       `;
     }).join('');
   }
+
+  container.querySelectorAll('[data-editar-cuota]').forEach(btn => {
+    btn.addEventListener('click', () => abrirModalEditarFechaCuota(appData.cuotas[parseInt(btn.dataset.editarCuota, 10)]));
+  });
 
   document.getElementById('cuota-filtro-actividad')?.addEventListener('change', filtrarCuotasPorActividad);
 
@@ -825,7 +843,7 @@ function renderCuotas(container) {
     const obs = document.getElementById('cuota-obs').value;
     const actividadPase = (document.getElementById('cuota-actividad-pase')?.value || '').trim();
 
-    const hoy = new Date().toISOString().slice(0, 10);
+    const hoy = document.getElementById('cuota-fecha').value || new Date().toISOString().slice(0, 10);
     const periodoReal = getPeriodoDesdeFecha(hoy) || periodo;
     const acts = (socio.actividad || '').split(',').map(a => a.trim()).filter(Boolean);
     const actividadFinal = actividadPase || (acts[0] || socio.actividad || '');
@@ -966,6 +984,43 @@ function renderVentas(container) {
     saveData(appData);
     renderPage('ventas');
   });
+}
+
+function abrirModalEditarFechaCuota(cuota) {
+  if (!cuota) return;
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay';
+  modal.innerHTML = `
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Editar fecha de pago</h3>
+        <button type="button" class="btn-cerrar" aria-label="Cerrar">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p style="color: var(--text-secondary); margin-bottom: 1rem;">${cuota.nombre} - ${formatMoney(cuota.monto)}</p>
+        <div class="form-group">
+          <label>Fecha del pago</label>
+          <input type="date" id="cuota-editar-fecha" value="${cuota.fecha || ''}" />
+        </div>
+        <div class="modal-footer" style="margin-top: 1rem;">
+          <button type="button" class="btn btn-primary" id="cuota-guardar-fecha">Guardar</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  modal.querySelector('.btn-cerrar').onclick = () => modal.remove();
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+  modal.querySelector('#cuota-guardar-fecha').onclick = () => {
+    const nuevaFecha = modal.querySelector('#cuota-editar-fecha').value;
+    if (nuevaFecha) {
+      cuota.fecha = nuevaFecha;
+      cuota.periodo = getPeriodoDesdeFecha(nuevaFecha) || cuota.periodo;
+      saveData(appData);
+      modal.remove();
+      renderPage('cuotas');
+    }
+  };
 }
 
 // --- STOCK ---
@@ -1574,13 +1629,6 @@ function renderActividades(container) {
     if (!acts.length && s.actividad) porActividad[s.actividad] = (porActividad[s.actividad] || 0) + 1;
   });
 
-  const montoPorActividad = {};
-  cuotas.forEach(c => {
-    const acts = (c.actividad || '').split(',').map(a => a.trim()).filter(Boolean);
-    if (acts.length) acts.forEach(act => { montoPorActividad[act] = (montoPorActividad[act] || 0) + (c.monto || 0); });
-    else if (c.actividad) montoPorActividad[c.actividad] = (montoPorActividad[c.actividad] || 0) + (c.monto || 0);
-  });
-
   container.innerHTML = `
     <div class="card">
       <h2 class="card-title">Agregar nueva actividad</h2>
@@ -1624,7 +1672,6 @@ function renderActividades(container) {
             <tr>
               <th>Actividad</th>
               <th>Alumnos</th>
-              <th>Abonado</th>
               <th>Profesor</th>
               <th>% Profesor</th>
               <th>Pago a profesor</th>
@@ -1637,7 +1684,6 @@ function renderActividades(container) {
               <tr>
                 <td>${a.nombre}</td>
                 <td>${porActividad[a.nombre] ?? 0}</td>
-                <td>${formatMoney(montoPorActividad[a.nombre] ?? 0)}</td>
                 <td>${a.profesor || '-'}</td>
                 <td>${((a.porcentaje_profesor || 0) * 100).toFixed(0)}%</td>
                 <td>${a.aplica_pago || 'No'}</td>
@@ -2345,6 +2391,38 @@ function renderFinanzas(container, opts = {}) {
           <button type="submit" class="btn btn-primary">Registrar</button>
         </div>
       </form>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">Facturación día a día (período actual)</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Fecha</th><th>Cuotas</th><th>Ventas</th><th>Total día</th></tr></thead>
+          <tbody>
+            ${(() => {
+              const porDia = {};
+              cuotas.forEach(c => {
+                const d = c.fecha || '';
+                if (!porDia[d]) porDia[d] = { cuotas: 0, ventas: 0 };
+                porDia[d].cuotas += c.monto || 0;
+              });
+              ventas.forEach(v => {
+                const d = v.fecha || '';
+                if (!porDia[d]) porDia[d] = { cuotas: 0, ventas: 0 };
+                porDia[d].ventas += (v.cantidad || 1) * (v.precio || 0);
+              });
+              return Object.entries(porDia).sort((a,b) => b[0].localeCompare(a[0])).map(([fecha, tot]) => `
+                <tr>
+                  <td>${formatDate(fecha)}</td>
+                  <td>${formatMoney(tot.cuotas)}</td>
+                  <td>${formatMoney(tot.ventas)}</td>
+                  <td>${formatMoney(tot.cuotas + tot.ventas)}</td>
+                </tr>
+              `).join('');
+            })()}
+          </tbody>
+        </table>
+      </div>
     </div>
 
     <div class="card">

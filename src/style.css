@@ -54,6 +54,13 @@ body {
   gap: 1rem;
 }
 
+.header-fecha {
+  display: block;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+
 .logo-img {
   height: 50px;
   width: auto;
