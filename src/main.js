@@ -5,16 +5,19 @@
 
 import { loadData, saveData, getPeriodoActual } from './storage.js';
 import { calcularSemaforo, formatMoney, formatDate, getRangoPeriodo15, fechaEnPeriodo15, diasDesdePago, diasRestantes, getPeriodoDesdeFecha } from './utils.js';
-import { isFinanzasAutenticado, setFinanzasAutenticado, verificarClave, filtrarPorPeriodo15, getPeriodosDisponibles } from './finanzas.js';
+import { isAdminAutenticado, setAdminAutenticado, verificarClave, filtrarPorPeriodo15, getPeriodosDisponibles } from './finanzas.js';
 
 let appData = null;
+let adminSubPage = 'profesores';
 
 // Navegación
 document.querySelectorAll('.nav-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
-    renderPage(btn.dataset.page);
+    const page = btn.dataset.page;
+    if (page === 'admin') adminSubPage = 'profesores';
+    renderPage(page);
   });
 });
 
@@ -120,6 +123,9 @@ function renderPage(page) {
     case 'actividades':
       renderActividades(container);
       break;
+    case 'admin':
+      renderAdmin(container);
+      break;
     case 'profesores':
       renderProfesores(container);
       break;
@@ -157,7 +163,7 @@ function renderDashboard(container) {
 
   let activos = 0, porVencer = 0, vencidos = 0;
   socios.forEach(s => {
-    const sem = calcularSemaforo(s.ultimo_periodo, periodo);
+    const sem = calcularSemaforo(s.ultimo_pago);
     if (sem.estado === 'activo') activos++;
     else if (sem.estado === 'por-vencer') porVencer++;
     else vencidos++;
@@ -207,7 +213,7 @@ function renderSocios(container) {
   const periodo = getPeriodoActual(appData);
   const socios = (appData.socios || []).slice();
   socios.forEach(s => {
-    const sem = calcularSemaforo(s.ultimo_periodo, periodo);
+    const sem = calcularSemaforo(s.ultimo_pago);
     s._semaforo = sem;
   });
 
@@ -399,7 +405,7 @@ function leerFormSocio(periodo) {
 
 function abrirModalEditarSocio(socio) {
   const periodo = getPeriodoActual(appData);
-  const sem = calcularSemaforo(socio.ultimo_periodo, periodo);
+  const sem = calcularSemaforo(socio.ultimo_pago);
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
   modal.innerHTML = `
@@ -531,6 +537,21 @@ function renderCuotas(container) {
   const periodo = getPeriodoActual(appData);
   const socios = appData.socios || [];
   const cuotas = filtrarPorPeriodo15(appData.cuotas || [], periodo);
+  const actividades = appData.actividades || [];
+
+  const alumnosPorActividad = {};
+  socios.forEach(s => {
+    const acts = (s.actividad || '').split(',').map(a => a.trim()).filter(Boolean);
+    acts.forEach(act => { alumnosPorActividad[act] = (alumnosPorActividad[act] || 0) + 1; });
+    if (!acts.length && s.actividad) alumnosPorActividad[s.actividad] = (alumnosPorActividad[s.actividad] || 0) + 1;
+  });
+
+  const montoPorActividad = {};
+  cuotas.forEach(c => {
+    const acts = (c.actividad || '').split(',').map(a => a.trim()).filter(Boolean);
+    if (acts.length) acts.forEach(act => { montoPorActividad[act] = (montoPorActividad[act] || 0) + (c.monto || 0); });
+    else if (c.actividad) montoPorActividad[c.actividad] = (montoPorActividad[c.actividad] || 0) + (c.monto || 0);
+  });
 
   let html = `
     <div class="card">
@@ -576,6 +597,28 @@ function renderCuotas(container) {
     </div>
 
     <div class="card">
+      <h3 class="card-title">Resumen por actividad (período ${periodo})</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Actividad</th><th>Alumnos</th><th>Abonado</th></tr></thead>
+          <tbody>
+            ${(() => {
+              const acts = actividades.length ? actividades.map(a => a.nombre) : [...new Set([...Object.keys(alumnosPorActividad), ...Object.keys(montoPorActividad)])];
+              return acts.map(nom => `<tr><td>${nom}</td><td>${alumnosPorActividad[nom] ?? 0}</td><td>${formatMoney(montoPorActividad[nom] ?? 0)}</td></tr>`).join('');
+            })()}
+          </tbody>
+        </table>
+      </div>
+      <div class="form-group" style="margin-top: 1rem;">
+        <label>Filtrar por actividad</label>
+        <select id="cuota-filtro-actividad">
+          <option value="">Todas</option>
+          ${(actividades.length ? actividades.map(a => a.nombre) : Object.keys(montoPorActividad)).map(nom => `<option value="${nom}">${nom}</option>`).join('')}
+        </select>
+      </div>
+    </div>
+
+    <div class="card">
       <h3 class="card-title">Pagos del período ${periodo} (15 a 15)</h3>
       <div class="table-wrap">
         <table>
@@ -591,7 +634,7 @@ function renderCuotas(container) {
               <th>Tipo</th>
             </tr>
           </thead>
-          <tbody>
+          <tbody id="cuota-tbody">
             ${cuotas.slice(-50).reverse().map(c => {
               const rest = diasRestantes(c.fecha);
               return `
@@ -612,6 +655,33 @@ function renderCuotas(container) {
     </div>
   `;
   container.innerHTML = html;
+
+  function filtrarCuotasPorActividad() {
+    const filtro = document.getElementById('cuota-filtro-actividad')?.value || '';
+    let list = cuotas.slice(-50).reverse();
+    if (filtro) list = list.filter(c => {
+      const acts = (c.actividad || '').split(',').map(a => a.trim());
+      return acts.includes(filtro);
+    });
+    const tbody = document.getElementById('cuota-tbody');
+    if (tbody) tbody.innerHTML = list.map(c => {
+      const rest = diasRestantes(c.fecha);
+      return `
+        <tr>
+          <td>${formatDate(c.fecha)}</td>
+          <td>${c.nombre}</td>
+          <td>${c.actividad || '-'}</td>
+          <td>${formatMoney(c.monto)}</td>
+          <td>${rest !== null ? rest + 'd' : '-'}</td>
+          <td>${c.pago_profesor ? formatMoney(c.pago_profesor) + ' (' + (c.profesor_nombre || '') + ')' : '-'}</td>
+          <td>${c.metodo || '-'}</td>
+          <td>${c.tipo || '-'}</td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  document.getElementById('cuota-filtro-actividad')?.addEventListener('change', filtrarCuotasPorActividad);
 
   document.getElementById('form-cuota').addEventListener('submit', (e) => {
     e.preventDefault();
@@ -898,7 +968,9 @@ function calcularPagoProfesor(profesor, montoCuota) {
   return 0;
 }
 
-function renderProfesores(container) {
+function renderProfesores(container, opts = {}) {
+  const isAdmin = opts.isAdmin || false;
+  const refresh = () => (isAdmin ? (adminSubPage = 'profesores', renderPage('admin')) : renderPage('profesores'));
   const profesores = appData.profesores || [];
   const periodo = getPeriodoActual(appData);
   const cuotas = (appData.cuotas || []).filter(c => c.periodo === periodo);
@@ -936,8 +1008,8 @@ function renderProfesores(container) {
           </select>
         </div>
         <div class="form-group" id="prof-valor-wrap">
-          <label>Valor (monto fijo, % o $/clase)</label>
-          <input type="number" id="prof-valor" placeholder="Ej: 35 o 5000" min="0" step="0.01" />
+          <label id="prof-valor-label">Valor (costo fijo $, % o $/clase)</label>
+          <input type="number" id="prof-valor" placeholder="Ej: 5000 (costo fijo) o 35 (%)" min="0" step="0.01" />
         </div>
         <div class="form-group" style="align-self: flex-end;">
           <button type="submit" class="btn btn-primary">Agregar</button>
@@ -961,7 +1033,10 @@ function renderProfesores(container) {
                 <td>${p.actividad || '-'}</td>
                 <td>${TIPOS_PAGO_PROF.find(t => t.id === p.tipo_pago)?.label || p.tipo_pago}</td>
                 <td>${p.tipo_pago === 'sin_pago' ? '-' : (p.valor || 0) + (p.tipo_pago === 'porcentaje_salon' ? '%' : '')}</td>
-                <td><button type="button" class="btn btn-secondary btn-sm" data-del-prof="${p.id}">Eliminar</button></td>
+                <td>
+                  <button type="button" class="btn btn-secondary btn-sm" data-edit-prof="${p.id}">Editar</button>
+                  <button type="button" class="btn btn-secondary btn-sm" data-del-prof="${p.id}">Eliminar</button>
+                </td>
               </tr>
             `).join('')}
           </tbody>
@@ -992,23 +1067,60 @@ function renderProfesores(container) {
     </div>
   `;
 
+  document.getElementById('prof-tipo')?.addEventListener('change', () => {
+    const tipo = document.getElementById('prof-tipo').value;
+    const lbl = document.getElementById('prof-valor-label');
+    const inp = document.getElementById('prof-valor');
+    if (tipo === 'costo_fijo') { lbl.textContent = 'Costo fijo mensual ($)'; inp.placeholder = 'Ej: 5000'; }
+    else if (tipo === 'porcentaje_salon') { lbl.textContent = 'Porcentaje (%)'; inp.placeholder = 'Ej: 35'; }
+    else if (tipo === 'por_clase') { lbl.textContent = 'Monto por clase ($)'; inp.placeholder = 'Ej: 1500'; }
+    else { lbl.textContent = 'Valor'; inp.placeholder = '-'; }
+  });
+
   document.getElementById('form-profesor')?.addEventListener('submit', (e) => {
     e.preventDefault();
     const nombre = document.getElementById('prof-nombre').value.trim();
     const actividad = document.getElementById('prof-actividad').value;
     const tipo_pago = document.getElementById('prof-tipo').value;
     const valor = parseFloat(document.getElementById('prof-valor').value) || 0;
+    const editingId = document.getElementById('form-profesor').dataset.editingId;
     if (!appData.profesores) appData.profesores = [];
-    appData.profesores.push({
-      id: 'prof' + Date.now(),
-      nombre,
-      actividad,
-      tipo_pago,
-      valor,
-      observacion: ''
-    });
+    if (editingId) {
+      const p = appData.profesores.find(x => x.id === editingId);
+      if (p) {
+        p.nombre = nombre;
+        p.actividad = actividad;
+        p.tipo_pago = tipo_pago;
+        p.valor = valor;
+      }
+      document.getElementById('form-profesor').dataset.editingId = '';
+      document.querySelector('#form-profesor button[type="submit"]').textContent = 'Agregar';
+      document.getElementById('form-profesor').reset();
+    } else {
+      appData.profesores.push({
+        id: 'prof' + Date.now(),
+        nombre,
+        actividad,
+        tipo_pago,
+        valor,
+        observacion: ''
+      });
+    }
     saveData(appData);
-    renderPage('profesores');
+    refresh();
+  });
+
+  container.querySelectorAll('[data-edit-prof]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const prof = profesores.find(p => p.id === btn.dataset.editProf);
+      if (!prof) return;
+      document.getElementById('prof-nombre').value = prof.nombre;
+      document.getElementById('prof-actividad').value = prof.actividad || '';
+      document.getElementById('prof-tipo').value = prof.tipo_pago || 'sin_pago';
+      document.getElementById('prof-valor').value = prof.valor ?? '';
+      document.getElementById('form-profesor').dataset.editingId = prof.id;
+      document.querySelector('#form-profesor button[type="submit"]').textContent = 'Guardar';
+    });
   });
 
   container.querySelectorAll('[data-del-prof]').forEach(btn => {
@@ -1016,7 +1128,7 @@ function renderProfesores(container) {
       if (confirm('¿Eliminar este profesor?')) {
         appData.profesores = appData.profesores.filter(p => p.id !== btn.dataset.delProf);
         saveData(appData);
-        renderPage('profesores');
+        refresh();
       }
     });
   });
@@ -1256,6 +1368,24 @@ function imprimirRutina(rutina) {
 function renderActividades(container) {
   const actividades = appData.actividades || [];
   const profesores = [...new Set((appData.profesores || []).map(p => p.nombre))];
+  const socios = appData.socios || [];
+  const cuotas = appData.cuotas || [];
+
+  const porActividad = {};
+  socios.forEach(s => {
+    const acts = (s.actividad || '').split(',').map(a => a.trim()).filter(Boolean);
+    acts.forEach(act => {
+      porActividad[act] = (porActividad[act] || 0) + 1;
+    });
+    if (!acts.length && s.actividad) porActividad[s.actividad] = (porActividad[s.actividad] || 0) + 1;
+  });
+
+  const montoPorActividad = {};
+  cuotas.forEach(c => {
+    const acts = (c.actividad || '').split(',').map(a => a.trim()).filter(Boolean);
+    if (acts.length) acts.forEach(act => { montoPorActividad[act] = (montoPorActividad[act] || 0) + (c.monto || 0); });
+    else if (c.actividad) montoPorActividad[c.actividad] = (montoPorActividad[c.actividad] || 0) + (c.monto || 0);
+  });
 
   container.innerHTML = `
     <div class="card">
@@ -1299,6 +1429,8 @@ function renderActividades(container) {
           <thead>
             <tr>
               <th>Actividad</th>
+              <th>Alumnos</th>
+              <th>Abonado</th>
               <th>Profesor</th>
               <th>% Profesor</th>
               <th>Pago a profesor</th>
@@ -1310,11 +1442,16 @@ function renderActividades(container) {
             ${actividades.map(a => `
               <tr>
                 <td>${a.nombre}</td>
+                <td>${porActividad[a.nombre] ?? 0}</td>
+                <td>${formatMoney(montoPorActividad[a.nombre] ?? 0)}</td>
                 <td>${a.profesor || '-'}</td>
                 <td>${((a.porcentaje_profesor || 0) * 100).toFixed(0)}%</td>
                 <td>${a.aplica_pago || 'No'}</td>
                 <td>${a.observacion || '-'}</td>
-                <td><button type="button" class="btn btn-secondary btn-sm" data-del-act="${a.nombre}" ${actividades.length <= 1 ? 'disabled title="Debe haber al menos una actividad"' : ''}>Eliminar</button></td>
+                <td>
+                  <button type="button" class="btn btn-secondary btn-sm" data-edit-act="${a.nombre}">Editar</button>
+                  <button type="button" class="btn btn-secondary btn-sm" data-del-act="${a.nombre}" ${actividades.length <= 1 ? 'disabled title="Debe haber al menos una actividad"' : ''}>Eliminar</button>
+                </td>
               </tr>
             `).join('')}
           </tbody>
@@ -1327,21 +1464,44 @@ function renderActividades(container) {
     e.preventDefault();
     const nombre = document.getElementById('act-nombre').value.trim();
     if (!nombre) return;
-    if (actividades.some(a => a.nombre === nombre)) {
+    const editingNombre = document.getElementById('form-actividad').dataset.editingAct;
+    if (!editingNombre && actividades.some(a => a.nombre === nombre)) {
       mostrarToast('Ya existe una actividad con ese nombre');
       return;
     }
     if (!appData.actividades) appData.actividades = [];
-    appData.actividades.push({
+    const data = {
       nombre,
       profesor: document.getElementById('act-profesor').value || '',
       porcentaje_profesor: (parseFloat(document.getElementById('act-porcentaje').value) || 0) / 100,
       aplica_pago: document.getElementById('act-pago').value || 'No',
       observacion: document.getElementById('act-obs').value || ''
-    });
+    };
+    if (editingNombre) {
+      const idx = appData.actividades.findIndex(a => a.nombre === editingNombre);
+      if (idx >= 0) appData.actividades[idx] = { ...appData.actividades[idx], ...data };
+      document.getElementById('form-actividad').dataset.editingAct = '';
+      document.querySelector('#form-actividad button[type="submit"]').textContent = 'Agregar';
+    } else {
+      appData.actividades.push(data);
+    }
     saveData(appData);
     document.getElementById('form-actividad').reset();
     renderPage('actividades');
+  });
+
+  container.querySelectorAll('[data-edit-act]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const act = actividades.find(a => a.nombre === btn.dataset.editAct);
+      if (!act) return;
+      document.getElementById('act-nombre').value = act.nombre;
+      document.getElementById('act-profesor').value = act.profesor || '';
+      document.getElementById('act-porcentaje').value = ((act.porcentaje_profesor || 0) * 100);
+      document.getElementById('act-pago').value = act.aplica_pago || 'No';
+      document.getElementById('act-obs').value = act.observacion || '';
+      document.getElementById('form-actividad').dataset.editingAct = act.nombre;
+      document.querySelector('#form-actividad button[type="submit"]').textContent = 'Guardar';
+    });
   });
 
   container.querySelectorAll('[data-del-act]').forEach(btn => {
@@ -1397,7 +1557,7 @@ function renderAccesoHuella(container) {
       semDetail.textContent = '';
       return;
     }
-    const sem = calcularSemaforo(socio.ultimo_periodo, periodo);
+    const sem = calcularSemaforo(socio.ultimo_pago);
     semGrande.className = `semaforo-grande ${sem.estado === 'activo' ? 'verde' : sem.estado === 'por-vencer' ? 'amarillo' : 'rojo'}`;
     semTexto.textContent = sem.estado === 'activo' ? 'AL DÍA' : sem.estado === 'por-vencer' ? 'POR VENCER' : 'VENCIDO';
     semDetail.textContent = `${socio.nombre} - ${socio.actividad} | Último pago: ${formatDate(socio.ultimo_pago)}`;
@@ -1420,10 +1580,10 @@ function renderAccesoHuella(container) {
 }
 
 // --- MÉTRICAS ---
-function renderMetricas(container) {
+function renderMetricas(container, opts = {}) {
   const periodo = getPeriodoActual(appData);
   const socios = (appData.socios || []).filter(s => {
-    const sem = calcularSemaforo(s.ultimo_periodo, periodo);
+    const sem = calcularSemaforo(s.ultimo_pago);
     return sem.estado === 'activo' || sem.estado === 'por-vencer';
   });
   const porActividad = {};
@@ -1451,33 +1611,87 @@ function renderMetricas(container) {
   `;
 }
 
-// --- FINANZAS (acceso restringido) ---
-function renderFinanzas(container) {
-  if (!isFinanzasAutenticado()) {
+// --- ADMINISTRACIÓN (acceso restringido) ---
+function renderAdmin(container) {
+  if (!isAdminAutenticado()) {
     container.innerHTML = `
       <div class="card" style="max-width: 400px; margin: 2rem auto;">
         <h2 class="card-title">Acceso restringido</h2>
-        <p style="color: var(--text-secondary); margin-bottom: 1rem;">Ingresá la contraseña para acceder a Finanzas.</p>
-        <form id="form-finanzas-login">
+        <p style="color: var(--text-secondary); margin-bottom: 1rem;">Ingresá la contraseña para acceder a Administración.</p>
+        <form id="form-admin-login">
           <div class="form-group">
-            <input type="password" id="finanzas-clave" placeholder="Contraseña" required />
+            <input type="password" id="admin-clave" placeholder="Contraseña" required />
           </div>
           <button type="submit" class="btn btn-primary">Entrar</button>
         </form>
       </div>
     `;
-    container.querySelector('#form-finanzas-login').onsubmit = (e) => {
+    container.querySelector('#form-admin-login').onsubmit = (e) => {
       e.preventDefault();
-      const clave = document.getElementById('finanzas-clave').value;
+      const clave = document.getElementById('admin-clave').value;
       if (verificarClave(clave, appData?.config)) {
-        setFinanzasAutenticado(true);
-        renderPage('finanzas');
+        setAdminAutenticado(true);
+        renderPage('admin');
       } else {
         mostrarToast('Contraseña incorrecta');
       }
     };
     return;
   }
+
+  const tabs = [
+    { id: 'profesores', label: 'Profesores' },
+    { id: 'finanzas', label: 'Finanzas' },
+    { id: 'config', label: 'Configuración' },
+    { id: 'metricas', label: 'Métricas' }
+  ];
+
+  container.innerHTML = `
+    <div class="card">
+      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+        <h2 class="card-title">Administración</h2>
+        <button type="button" class="btn btn-secondary" id="cerrar-admin">Cerrar sesión</button>
+      </div>
+      <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 1rem;">
+        ${tabs.map(t => `
+          <button type="button" class="btn ${t.id === adminSubPage ? 'btn-primary' : 'btn-secondary'}" data-admin-tab="${t.id}">${t.label}</button>
+        `).join('')}
+      </div>
+    </div>
+    <div id="admin-content"></div>
+  `;
+
+  document.getElementById('cerrar-admin').onclick = () => {
+    setAdminAutenticado(false);
+    renderPage('admin');
+  };
+
+  container.querySelectorAll('[data-admin-tab]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      adminSubPage = btn.dataset.adminTab;
+      document.querySelectorAll('[data-admin-tab]').forEach(b => {
+        b.className = 'btn ' + (b.dataset.adminTab === adminSubPage ? 'btn-primary' : 'btn-secondary');
+      });
+      const contentDiv = document.getElementById('admin-content');
+      contentDiv.innerHTML = '';
+      if (adminSubPage === 'profesores') renderProfesores(contentDiv, { isAdmin: true });
+      else if (adminSubPage === 'finanzas') renderFinanzas(contentDiv, { isAdmin: true });
+      else if (adminSubPage === 'config') renderConfig(contentDiv, { isAdmin: true });
+      else if (adminSubPage === 'metricas') renderMetricas(contentDiv, { isAdmin: true });
+    });
+  });
+
+  const contentDiv = document.getElementById('admin-content');
+  if (adminSubPage === 'profesores') renderProfesores(contentDiv, { isAdmin: true });
+  else if (adminSubPage === 'finanzas') renderFinanzas(contentDiv, { isAdmin: true });
+  else if (adminSubPage === 'config') renderConfig(contentDiv, { isAdmin: true });
+  else if (adminSubPage === 'metricas') renderMetricas(contentDiv, { isAdmin: true });
+}
+
+// --- FINANZAS (acceso restringido) ---
+function renderFinanzas(container, opts = {}) {
+  const isAdmin = opts.isAdmin || false;
+  if (!isAdmin && !isAdminAutenticado()) return;
 
   const periodo = getPeriodoActual(appData);
   const diaFin = appData?.config?.periodo_dia_fin || 16;
@@ -1523,7 +1737,7 @@ function renderFinanzas(container) {
     <div class="card">
       <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
         <h2 class="card-title">Finanzas</h2>
-        <button type="button" class="btn btn-secondary" id="cerrar-finanzas">Cerrar sesión</button>
+        ${!isAdmin ? '<button type="button" class="btn btn-secondary" id="cerrar-finanzas">Cerrar sesión</button>' : ''}
       </div>
       <p style="color: var(--text-secondary);">Período ${periodo}: ${inicio} al ${fin}</p>
     </div>
@@ -1614,10 +1828,10 @@ function renderFinanzas(container) {
     </div>
   `;
 
-  document.getElementById('cerrar-finanzas').onclick = () => {
-    setFinanzasAutenticado(false);
-    renderPage('finanzas');
-  };
+  document.getElementById('cerrar-finanzas')?.addEventListener('click', () => {
+    setAdminAutenticado(false);
+    renderPage(isAdmin ? 'admin' : 'finanzas');
+  });
 
   const actualizarResumenPeriodo = (p) => {
     const c = filtrarPorPeriodo15(appData.cuotas || [], p);
@@ -1641,12 +1855,12 @@ function renderFinanzas(container) {
       adelantado: document.getElementById('pago-prof-adelantado').checked
     });
     saveData(appData);
-    renderPage('finanzas');
+    renderPage(isAdmin ? 'admin' : 'finanzas');
   });
 }
 
 // --- CONFIG ---
-function renderConfig(container) {
+function renderConfig(container, opts = {}) {
   const config = appData.config || {};
 
   container.innerHTML = `
@@ -1666,7 +1880,7 @@ function renderConfig(container) {
           <input type="number" id="config-luz" value="${config.tarifa_luz || 1}" />
         </div>
         <div class="form-group">
-          <label>Contraseña Finanzas</label>
+          <label>Contraseña Administración</label>
           <input type="password" id="config-finanzas-clave" value="${config.finanzas_clave || 'admin'}" placeholder="admin" />
         </div>
         <button type="submit" class="btn btn-primary">Guardar</button>

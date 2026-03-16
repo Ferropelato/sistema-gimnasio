@@ -78,37 +78,17 @@ export function diasRestantes(fechaPagoStr) {
 }
 
 /**
- * Calcula el estado del semáforo según último pago y período actual
- * Verde = activo (pagó período actual)
- * Amarillo = vence en 7 días
- * Rojo = vencido
+ * Calcula el estado del semáforo según fecha del último pago (30 días de vigencia)
+ * Verde = activo (pagó hace menos de 23 días)
+ * Amarillo = vence en 7 días (entre 23 y 30 días desde pago)
+ * Rojo = vencido (más de 30 días desde pago)
  */
-export function calcularSemaforo(ultimoPeriodo, periodoActual) {
-  if (!ultimoPeriodo || !periodoActual) return { estado: 'vencido', clase: 'vencido', dias: -1 };
-  
-  const [a1, m1] = ultimoPeriodo.split('-').map(Number);
-  const [a2, m2] = periodoActual.split('-').map(Number);
-  
-  const mesesDiff = (a2 - a1) * 12 + (m2 - m1);
-  
-  if (mesesDiff > 0) {
-    return { estado: 'vencido', clase: 'vencido', dias: -mesesDiff * 30 };
-  }
-  if (mesesDiff < 0) {
-    return { estado: 'activo', clase: 'activo', dias: Math.abs(mesesDiff) * 30 };
-  }
-  
-  const hoy = new Date();
-  const ultimoDiaMes = new Date(a2, m2, 0);
-  const diasRestantes = Math.ceil((ultimoDiaMes - hoy) / (1000 * 60 * 60 * 24));
-  
-  if (diasRestantes <= 0) {
-    return { estado: 'por-vencer', clase: 'por-vencer', dias: 0 };
-  }
-  if (diasRestantes <= 7) {
-    return { estado: 'por-vencer', clase: 'por-vencer', dias: diasRestantes };
-  }
-  return { estado: 'activo', clase: 'activo', dias: diasRestantes };
+export function calcularSemaforo(ultimoPagoStr) {
+  const rest = diasRestantes(ultimoPagoStr);
+  if (rest === null) return { estado: 'vencido', clase: 'vencido', dias: -1 };
+  if (rest <= 0) return { estado: 'vencido', clase: 'vencido', dias: 0 };
+  if (rest <= 7) return { estado: 'por-vencer', clase: 'por-vencer', dias: rest };
+  return { estado: 'activo', clase: 'activo', dias: rest };
 }
 
 export function formatMoney(n) {

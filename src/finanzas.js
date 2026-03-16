@@ -5,15 +5,23 @@
 
 import { getRangoPeriodo15, fechaEnPeriodo15, formatMoney, formatDate } from './utils.js';
 
-const FINANZAS_KEY = 'center-gym-finanzas-auth';
+const ADMIN_KEY = 'center-gym-admin-auth';
+
+export function isAdminAutenticado() {
+  return sessionStorage.getItem(ADMIN_KEY) === '1';
+}
+
+export function setAdminAutenticado(val) {
+  if (val) sessionStorage.setItem(ADMIN_KEY, '1');
+  else sessionStorage.removeItem(ADMIN_KEY);
+}
 
 export function isFinanzasAutenticado() {
-  return sessionStorage.getItem(FINANZAS_KEY) === '1';
+  return isAdminAutenticado();
 }
 
 export function setFinanzasAutenticado(val) {
-  if (val) sessionStorage.setItem(FINANZAS_KEY, '1');
-  else sessionStorage.removeItem(FINANZAS_KEY);
+  setAdminAutenticado(val);
 }
 
 export function verificarClave(clave, config) {
