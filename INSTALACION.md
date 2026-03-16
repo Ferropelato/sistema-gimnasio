@@ -43,9 +43,10 @@ c:\Users\Fernando\Desktop\curso desarrollador\gimnasio
 
 ## Datos
 
-- Los datos se guardan en **localStorage** del navegador
-- Cada dispositivo (PC, celular) tiene sus propios datos
-- Para sincronizar entre dispositivos: exportar/importar JSON (función a agregar)
+- Los datos se guardan en **localStorage** del navegador y persisten al cerrar
+- **Exportar**: descargá un backup JSON (botón 📤) para guardarlo en tu PC
+- **Importar**: restauramos desde un archivo JSON (botón 📥) si borraste caché o cambiás de dispositivo
+- **Recomendación**: exportá un backup cada semana o antes de limpiar el navegador
 
 ## Contraseña Finanzas
 

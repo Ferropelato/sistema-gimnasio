@@ -885,7 +885,14 @@
       "nombre": "Funcional",
       "profesor": "Profe Funcional",
       "porcentaje_profesor": 0.35,
-      "observacion": "Incluye Fem Power / Functional",
+      "observacion": "Editable",
+      "aplica_pago": "Sí"
+    },
+    {
+      "nombre": "Fem Power",
+      "profesor": "Profe Funcional",
+      "porcentaje_profesor": 0.35,
+      "observacion": "Editable",
       "aplica_pago": "Sí"
     },
     {

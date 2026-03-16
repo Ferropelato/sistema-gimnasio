@@ -30,6 +30,42 @@ async function init() {
     }
   });
 
+  // Exportar backup (descarga JSON)
+  document.getElementById('btn-exportar')?.addEventListener('click', () => {
+    if (!appData) return;
+    const blob = new Blob([JSON.stringify(appData, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `center-gym-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    mostrarToast('Backup descargado');
+  });
+
+  // Importar backup
+  const inputImport = document.createElement('input');
+  inputImport.type = 'file';
+  inputImport.accept = '.json,application/json';
+  inputImport.style.display = 'none';
+  inputImport.onchange = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      if (!data.socios || !Array.isArray(data.socios)) throw new Error('Archivo inválido');
+      appData = data;
+      saveData(appData);
+      mostrarToast('Datos restaurados correctamente');
+      renderPage('dashboard');
+    } catch (err) {
+      mostrarToast('Error: archivo no válido');
+    }
+    inputImport.value = '';
+  };
+  document.body.appendChild(inputImport);
+  document.getElementById('btn-importar')?.addEventListener('click', () => inputImport.click());
+
   // Autoguardado al cerrar / cambiar de pestaña
   function guardarAlSalir() {
     if (appData) saveData(appData);
@@ -1219,10 +1255,45 @@ function imprimirRutina(rutina) {
 // --- ACTIVIDADES ---
 function renderActividades(container) {
   const actividades = appData.actividades || [];
+  const profesores = [...new Set((appData.profesores || []).map(p => p.nombre))];
 
   container.innerHTML = `
     <div class="card">
-      <h2 class="card-title">Actividades y profesores</h2>
+      <h2 class="card-title">Agregar nueva actividad</h2>
+      <form id="form-actividad" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+        <div class="form-group">
+          <label>Nombre</label>
+          <input type="text" id="act-nombre" placeholder="Ej: Fem Power, Yoga" required />
+        </div>
+        <div class="form-group">
+          <label>Profesor</label>
+          <select id="act-profesor">
+            <option value="">Sin profesor</option>
+            ${profesores.map(n => `<option value="${n}">${n}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>% Profesor (0-100)</label>
+          <input type="number" id="act-porcentaje" placeholder="35" min="0" max="100" step="1" />
+        </div>
+        <div class="form-group">
+          <label>Pago a profesor</label>
+          <select id="act-pago">
+            <option value="Sí">Sí</option>
+            <option value="No">No</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Observación</label>
+          <input type="text" id="act-obs" placeholder="Opcional" />
+        </div>
+        <div class="form-group" style="align-self: flex-end;">
+          <button type="submit" class="btn btn-primary">Agregar</button>
+        </div>
+      </form>
+    </div>
+    <div class="card">
+      <h2 class="card-title">Actividades</h2>
       <div class="table-wrap">
         <table>
           <thead>
@@ -1232,6 +1303,7 @@ function renderActividades(container) {
               <th>% Profesor</th>
               <th>Pago a profesor</th>
               <th>Observación</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -1239,9 +1311,10 @@ function renderActividades(container) {
               <tr>
                 <td>${a.nombre}</td>
                 <td>${a.profesor || '-'}</td>
-                <td>${(a.porcentaje_profesor * 100).toFixed(0)}%</td>
+                <td>${((a.porcentaje_profesor || 0) * 100).toFixed(0)}%</td>
                 <td>${a.aplica_pago || 'No'}</td>
                 <td>${a.observacion || '-'}</td>
+                <td><button type="button" class="btn btn-secondary btn-sm" data-del-act="${a.nombre}" ${actividades.length <= 1 ? 'disabled title="Debe haber al menos una actividad"' : ''}>Eliminar</button></td>
               </tr>
             `).join('')}
           </tbody>
@@ -1249,6 +1322,39 @@ function renderActividades(container) {
       </div>
     </div>
   `;
+
+  document.getElementById('form-actividad')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const nombre = document.getElementById('act-nombre').value.trim();
+    if (!nombre) return;
+    if (actividades.some(a => a.nombre === nombre)) {
+      mostrarToast('Ya existe una actividad con ese nombre');
+      return;
+    }
+    if (!appData.actividades) appData.actividades = [];
+    appData.actividades.push({
+      nombre,
+      profesor: document.getElementById('act-profesor').value || '',
+      porcentaje_profesor: (parseFloat(document.getElementById('act-porcentaje').value) || 0) / 100,
+      aplica_pago: document.getElementById('act-pago').value || 'No',
+      observacion: document.getElementById('act-obs').value || ''
+    });
+    saveData(appData);
+    document.getElementById('form-actividad').reset();
+    renderPage('actividades');
+  });
+
+  container.querySelectorAll('[data-del-act]').forEach(btn => {
+    if (btn.disabled) return;
+    btn.addEventListener('click', () => {
+      const nom = btn.dataset.delAct;
+      if (confirm(`¿Eliminar la actividad "${nom}"? Los socios con esta actividad quedarán sin asignar.`)) {
+        appData.actividades = appData.actividades.filter(a => a.nombre !== nom);
+        saveData(appData);
+        renderPage('actividades');
+      }
+    });
+  });
 }
 
 // --- ACCESO HUELLA ---
