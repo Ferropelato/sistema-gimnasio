@@ -2088,6 +2088,7 @@ function renderAdmin(container) {
   const tabs = [
     { id: 'profesores', label: 'Profesores' },
     { id: 'finanzas', label: 'Finanzas' },
+    { id: 'unificar', label: 'Unificar duplicados' },
     { id: 'config', label: 'Configuración' },
     { id: 'metricas', label: 'Métricas' }
   ];
@@ -2122,6 +2123,7 @@ function renderAdmin(container) {
       contentDiv.innerHTML = '';
       if (adminSubPage === 'profesores') renderProfesores(contentDiv, { isAdmin: true });
       else if (adminSubPage === 'finanzas') renderFinanzas(contentDiv, { isAdmin: true });
+      else if (adminSubPage === 'unificar') renderUnificar(contentDiv);
       else if (adminSubPage === 'config') renderConfig(contentDiv, { isAdmin: true });
       else if (adminSubPage === 'metricas') renderMetricas(contentDiv, { isAdmin: true });
     });
@@ -2130,8 +2132,108 @@ function renderAdmin(container) {
   const contentDiv = document.getElementById('admin-content');
   if (adminSubPage === 'profesores') renderProfesores(contentDiv, { isAdmin: true });
   else if (adminSubPage === 'finanzas') renderFinanzas(contentDiv, { isAdmin: true });
+  else if (adminSubPage === 'unificar') renderUnificar(contentDiv);
   else if (adminSubPage === 'config') renderConfig(contentDiv, { isAdmin: true });
   else if (adminSubPage === 'metricas') renderMetricas(contentDiv, { isAdmin: true });
+}
+
+// --- UNIFICAR DUPLICADOS ---
+function getApellido(nombre) {
+  const partes = (nombre || '').trim().split(/\s+/);
+  return partes.length > 1 ? partes[partes.length - 1].toLowerCase() : (partes[0] || '').toLowerCase();
+}
+
+function getNombreSinApellido(nombre) {
+  const partes = (nombre || '').trim().split(/\s+/);
+  return partes.length > 1 ? partes.slice(0, -1).join(' ').toLowerCase() : '';
+}
+
+function sonPosiblesDuplicados(a, b) {
+  const nomA = (a.nombre || '').toLowerCase().trim();
+  const nomB = (b.nombre || '').toLowerCase().trim();
+  if (nomA === nomB) return false;
+  const apellidoA = getApellido(a.nombre);
+  const apellidoB = getApellido(b.nombre);
+  if (apellidoA !== apellidoB) return false;
+  const nombreA = getNombreSinApellido(a.nombre);
+  const nombreB = getNombreSinApellido(b.nombre);
+  if (!nombreA || !nombreB) return true;
+  return nombreA.includes(nombreB) || nombreB.includes(nombreA) || nombreA.split(/\s+/).some(n => nombreB.includes(n)) || nombreB.split(/\s+/).some(n => nombreA.includes(n));
+}
+
+function renderUnificar(container) {
+  const socios = appData.socios || [];
+  const duplicados = [];
+  const vistos = new Set();
+  for (let i = 0; i < socios.length; i++) {
+    for (let j = i + 1; j < socios.length; j++) {
+      const a = socios[i];
+      const b = socios[j];
+      const key = [a.id, b.id].sort().join('-');
+      if (!vistos.has(key) && sonPosiblesDuplicados(a, b)) {
+        vistos.add(key);
+        duplicados.push([a, b]);
+      }
+    }
+  }
+
+  container.innerHTML = `
+    <div class="card">
+      <h2 class="card-title">Unificar socios duplicados</h2>
+      <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+        Se detectan posibles duplicados por apellido y nombre similar (ej: Carlos Vino y Carlos Ruben Vino).
+        Elegí cuál nombre conservar y unificá. Las cuotas del otro pasan al socio que conservás.
+      </p>
+      ${duplicados.length === 0 ? `
+        <p style="color: var(--semaforo-verde);">No se encontraron posibles duplicados.</p>
+      ` : `
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Socio 1</th><th>Socio 2</th><th>Acción</th></tr></thead>
+            <tbody>
+              ${duplicados.map(([a, b]) => `
+                <tr data-unify="${a.id}-${b.id}">
+                  <td>${a.nombre} <span style="color: var(--text-secondary); font-size: 0.85rem;">(${formatDate(a.ultimo_pago)}, ${a.actividad})</span></td>
+                  <td>${b.nombre} <span style="color: var(--text-secondary); font-size: 0.85rem;">(${formatDate(b.ultimo_pago)}, ${b.actividad})</span></td>
+                  <td>
+                    <button type="button" class="btn btn-secondary btn-sm" data-keep="${a.id}" data-remove="${b.id}">Conservar "${a.nombre}"</button>
+                    <button type="button" class="btn btn-secondary btn-sm" data-keep="${b.id}" data-remove="${a.id}">Conservar "${b.nombre}"</button>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `}
+    </div>
+  `;
+
+  container.querySelectorAll('[data-keep]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const keepId = btn.dataset.keep;
+      const removeId = btn.dataset.remove;
+      const socioKeep = socios.find(s => s.id === keepId);
+      const socioRemove = socios.find(s => s.id === removeId);
+      if (!socioKeep || !socioRemove) return;
+      if (!confirm(`¿Unificar? Se conserva "${socioKeep.nombre}" y se elimina "${socioRemove.nombre}". Las cuotas se actualizarán.`)) return;
+      (appData.cuotas || []).forEach(c => {
+        if (c.nombre === socioRemove.nombre) c.nombre = socioKeep.nombre;
+      });
+      appData.socios = appData.socios.filter(s => s.id !== removeId);
+      if (socioRemove.ultimo_pago > socioKeep.ultimo_pago) {
+        socioKeep.ultimo_pago = socioRemove.ultimo_pago;
+        socioKeep.ultimo_periodo = socioRemove.ultimo_periodo;
+      }
+      if ((socioRemove.telefono || socioRemove.email || socioRemove.direccion) && !socioKeep.telefono) {
+        socioKeep.telefono = socioKeep.telefono || socioRemove.telefono;
+        socioKeep.email = socioKeep.email || socioRemove.email;
+        socioKeep.direccion = socioKeep.direccion || socioRemove.direccion;
+      }
+      saveData(appData);
+      mostrarToast('Socios unificados correctamente');
+      renderPage('admin');
+    });
+  });
 }
 
 // --- FINANZAS (acceso restringido) ---
