@@ -1,0 +1,16 @@
+{
+  "name": "center-gym-sistema",
+  "version": "1.0.0",
+  "description": "Sistema de gestión para Center Gym",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "vite",
+    "run": "vite"
+  },
+  "devDependencies": {
+    "vite": "^5.0.0"
+  }
+}
