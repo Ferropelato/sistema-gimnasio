@@ -65,14 +65,21 @@ En Firebase Console → Realtime Database → Reglas, usá:
 
 Para producción, considerá restringir con autenticación.
 
-## Deploy (obtener link público)
+## Deploy (Vercel + GitHub)
 
-1. Instalá Vercel CLI: `npm i -g vercel`
-2. Iniciá sesión: `vercel login` (te abre el navegador)
-3. Deploy: `vercel --prod`
-4. Te dará un link como: `https://gimnasio-xxx.vercel.app`
+El proyecto está en **GitHub** (sistema-gimnasio) y **Vercel** hace deploy automático al hacer push.
 
-Alternativa sin CLI: subí el proyecto a [vercel.com](https://vercel.com) conectando tu repo de GitHub.
+**Para actualizar:**
+```bash
+git add .
+git commit -m "Descripción del cambio"
+git push origin main
+```
+Vercel detecta el push y redeploya en ~1 min.
+
+**Link:** [sistema-gimnasio](https://vercel.com/fernando-ropelatos-projects/sistema-gimnasio) → en Domains verás la URL (ej: `sistema-gimnasio.vercel.app`).
+
+**Firebase:** Agregá el dominio de Vercel en Firebase Console → Configuración → Dominios autorizados (ej: `*.vercel.app`).
 
 ## Contraseña Finanzas
 
