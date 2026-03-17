@@ -1243,16 +1243,20 @@ const TIPOS_PAGO_PROF = [
   { id: 'sin_pago', label: 'Sin pago' },
   { id: 'costo_fijo', label: 'Costo fijo mensual' },
   { id: 'porcentaje_salon', label: '% del uso del salón' },
+  { id: 'fijo_mas_porcentaje', label: 'Fijo + % de clases/actividad' },
   { id: 'por_clase', label: 'Por clase' }
 ];
 
+/** Retorna la parte variable por cuota (porcentaje). Para fijo_mas_porcentaje solo el %; el fijo se suma aparte en liquidación. */
 function calcularPagoProfesor(profesor, montoCuota) {
   if (!profesor || profesor.tipo_pago === 'sin_pago') return 0;
   if (profesor.tipo_pago === 'costo_fijo') return profesor.valor || 0;
   if (profesor.tipo_pago === 'porcentaje_salon') return Math.round(montoCuota * (profesor.valor || 0) / 100);
-  if (profesor.tipo_pago === 'por_clase') return (profesor.valor || 0); // por clase - se suma manual
+  if (profesor.tipo_pago === 'fijo_mas_porcentaje') return Math.round(montoCuota * (profesor.valor_porcentaje || profesor.valor || 0) / 100);
+  if (profesor.tipo_pago === 'por_clase') return 0; // se suma manual por cantidad de clases
   return 0;
 }
+
 
 function renderProfesores(container, opts = {}) {
   const isAdmin = opts.isAdmin || false;
@@ -1263,10 +1267,26 @@ function renderProfesores(container, opts = {}) {
 
   const liquidacion = {};
   cuotas.forEach(c => {
-    const prof = profesores.find(p => p.actividad === c.actividad);
-    const pago = calcularPagoProfesor(prof, c.monto || 0);
-    if (prof && pago > 0) {
-      liquidacion[prof.nombre] = (liquidacion[prof.nombre] || 0) + pago;
+    const acts = (c.actividad || '').split(',').map(a => a.trim()).filter(Boolean);
+    acts.forEach(act => {
+      const prof = profesores.find(p => p.actividad === act);
+      const pago = prof ? calcularPagoProfesor(prof, (c.monto || 0) / Math.max(1, acts.length)) : 0;
+      if (prof && pago > 0) liquidacion[prof.nombre] = (liquidacion[prof.nombre] || 0) + pago;
+    });
+    if (!acts.length && c.actividad) {
+      const prof = profesores.find(p => p.actividad === c.actividad);
+      const pago = prof ? calcularPagoProfesor(prof, c.monto || 0) : 0;
+      if (prof && pago > 0) liquidacion[prof.nombre] = (liquidacion[prof.nombre] || 0) + pago;
+    }
+  });
+  profesores.forEach(p => {
+    if (p.tipo_pago === 'fijo_mas_porcentaje') {
+      liquidacion[p.nombre] = (liquidacion[p.nombre] || 0) + (p.valor || 0);
+    }
+    if (p.tipo_pago === 'por_clase') {
+      const clases = (appData.clases_profesor || []).find(c => c.periodo === periodo && c.profesor_id === p.id);
+      const cant = clases?.cantidad || 0;
+      if (cant > 0) liquidacion[p.nombre] = (liquidacion[p.nombre] || 0) + (p.valor || 0) * cant;
     }
   });
 
@@ -1295,7 +1315,11 @@ function renderProfesores(container, opts = {}) {
         </div>
         <div class="form-group" id="prof-valor-wrap">
           <label id="prof-valor-label">Valor (costo fijo $, % o $/clase)</label>
-          <input type="number" id="prof-valor" placeholder="Ej: 5000 (costo fijo) o 35 (%)" min="0" step="0.01" />
+          <input type="number" id="prof-valor" placeholder="Ej: 5000 o 35" min="0" step="0.01" />
+        </div>
+        <div class="form-group" id="prof-valor-porcentaje-wrap" style="display: none;">
+          <label id="prof-valor-porcentaje-label">% de clases/actividad</label>
+          <input type="number" id="prof-valor-porcentaje" placeholder="Ej: 35" min="0" max="100" step="0.01" />
         </div>
         <div class="form-group" style="align-self: flex-end;">
           <button type="submit" class="btn btn-primary">Agregar</button>
@@ -1318,7 +1342,7 @@ function renderProfesores(container, opts = {}) {
                 <td>${p.nombre}</td>
                 <td>${p.actividad || '-'}</td>
                 <td>${TIPOS_PAGO_PROF.find(t => t.id === p.tipo_pago)?.label || p.tipo_pago}</td>
-                <td>${p.tipo_pago === 'sin_pago' ? '-' : (p.valor || 0) + (p.tipo_pago === 'porcentaje_salon' ? '%' : '')}</td>
+                <td>${p.tipo_pago === 'sin_pago' ? '-' : p.tipo_pago === 'fijo_mas_porcentaje' ? `$${p.valor || 0} + ${p.valor_porcentaje || 0}%` : (p.valor || 0) + (p.tipo_pago === 'porcentaje_salon' ? '%' : p.tipo_pago === 'por_clase' ? '/clase' : '')}</td>
                 <td>
                   <button type="button" class="btn btn-secondary btn-sm" data-edit-prof="${p.id}">Editar</button>
                   <button type="button" class="btn btn-secondary btn-sm" data-del-prof="${p.id}">Eliminar</button>
@@ -1351,17 +1375,57 @@ function renderProfesores(container, opts = {}) {
         </table>
       </div>
     </div>
+    <div class="card">
+      <h3 class="card-title">Registrar clases del período (profesores por clase)</h3>
+      <p style="color: var(--text-secondary); margin-bottom: 1rem;">Para profesores con pago "Por clase", indicá cuántas clases dieron en el período.</p>
+      <form id="form-clases-prof" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
+        <div class="form-group">
+          <label>Profesor</label>
+          <select id="clases-prof-nombre">
+            <option value="">Seleccionar...</option>
+            ${profesores.filter(p => p.tipo_pago === 'por_clase').map(p => `<option value="${p.id}">${p.nombre} (${p.actividad})</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Cantidad de clases</label>
+          <input type="number" id="clases-prof-cantidad" min="0" placeholder="Ej: 12" />
+        </div>
+        <div class="form-group" style="align-self: flex-end;">
+          <button type="submit" class="btn btn-primary">Registrar</button>
+        </div>
+      </form>
+      ${profesores.filter(p => p.tipo_pago === 'por_clase').length ? `
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Profesor</th><th>Clases período</th><th>Monto/clase</th><th>Subtotal</th></tr></thead>
+          <tbody>
+            ${profesores.filter(p => p.tipo_pago === 'por_clase').map(p => {
+              const c = (appData.clases_profesor || []).find(x => x.periodo === periodo && x.profesor_id === p.id);
+              const cant = c?.cantidad || 0;
+              return `<tr><td>${p.nombre}</td><td>${cant}</td><td>${formatMoney(p.valor)}</td><td>${formatMoney((p.valor || 0) * cant)}</td></tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+      ` : '<p style="color: var(--text-secondary);">No hay profesores con pago por clase.</p>'}
+    </div>
   `;
 
-  document.getElementById('prof-tipo')?.addEventListener('change', () => {
+  function toggleProfValorFields() {
     const tipo = document.getElementById('prof-tipo').value;
     const lbl = document.getElementById('prof-valor-label');
     const inp = document.getElementById('prof-valor');
+    const wrapPorc = document.getElementById('prof-valor-porcentaje-wrap');
+    const inpPorc = document.getElementById('prof-valor-porcentaje');
+    wrapPorc.style.display = tipo === 'fijo_mas_porcentaje' ? 'block' : 'none';
     if (tipo === 'costo_fijo') { lbl.textContent = 'Costo fijo mensual ($)'; inp.placeholder = 'Ej: 5000'; }
     else if (tipo === 'porcentaje_salon') { lbl.textContent = 'Porcentaje (%)'; inp.placeholder = 'Ej: 35'; }
+    else if (tipo === 'fijo_mas_porcentaje') { lbl.textContent = 'Fijo mensual ($)'; inp.placeholder = 'Ej: 10000'; }
     else if (tipo === 'por_clase') { lbl.textContent = 'Monto por clase ($)'; inp.placeholder = 'Ej: 1500'; }
     else { lbl.textContent = 'Valor'; inp.placeholder = '-'; }
-  });
+  }
+  document.getElementById('prof-tipo')?.addEventListener('change', toggleProfValorFields);
+  toggleProfValorFields();
 
   document.getElementById('form-profesor')?.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -1369,6 +1433,7 @@ function renderProfesores(container, opts = {}) {
     const actividad = document.getElementById('prof-actividad').value;
     const tipo_pago = document.getElementById('prof-tipo').value;
     const valor = parseFloat(document.getElementById('prof-valor').value) || 0;
+    const valor_porcentaje = parseFloat(document.getElementById('prof-valor-porcentaje')?.value) || 0;
     const editingId = document.getElementById('form-profesor').dataset.editingId;
     if (!appData.profesores) appData.profesores = [];
     if (editingId) {
@@ -1378,19 +1443,16 @@ function renderProfesores(container, opts = {}) {
         p.actividad = actividad;
         p.tipo_pago = tipo_pago;
         p.valor = valor;
+        if (tipo_pago === 'fijo_mas_porcentaje') p.valor_porcentaje = valor_porcentaje;
+        else delete p.valor_porcentaje;
       }
       document.getElementById('form-profesor').dataset.editingId = '';
       document.querySelector('#form-profesor button[type="submit"]').textContent = 'Agregar';
       document.getElementById('form-profesor').reset();
     } else {
-      appData.profesores.push({
-        id: 'prof' + Date.now(),
-        nombre,
-        actividad,
-        tipo_pago,
-        valor,
-        observacion: ''
-      });
+      const nuevo = { id: 'prof' + Date.now(), nombre, actividad, tipo_pago, valor, observacion: '' };
+      if (tipo_pago === 'fijo_mas_porcentaje') nuevo.valor_porcentaje = valor_porcentaje;
+      appData.profesores.push(nuevo);
     }
     saveData(appData);
     refresh();
@@ -1404,6 +1466,8 @@ function renderProfesores(container, opts = {}) {
       document.getElementById('prof-actividad').value = prof.actividad || '';
       document.getElementById('prof-tipo').value = prof.tipo_pago || 'sin_pago';
       document.getElementById('prof-valor').value = prof.valor ?? '';
+      (document.getElementById('prof-valor-porcentaje') || {}).value = prof.valor_porcentaje ?? '';
+      toggleProfValorFields();
       document.getElementById('form-profesor').dataset.editingId = prof.id;
       document.querySelector('#form-profesor button[type="submit"]').textContent = 'Guardar';
     });
@@ -1417,6 +1481,19 @@ function renderProfesores(container, opts = {}) {
         refresh();
       }
     });
+  });
+
+  document.getElementById('form-clases-prof')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const profesorId = document.getElementById('clases-prof-nombre').value;
+    const cantidad = parseInt(document.getElementById('clases-prof-cantidad').value, 10) || 0;
+    if (!profesorId || cantidad <= 0) return;
+    if (!appData.clases_profesor) appData.clases_profesor = [];
+    const existente = appData.clases_profesor.findIndex(c => c.periodo === periodo && c.profesor_id === profesorId);
+    if (existente >= 0) appData.clases_profesor[existente].cantidad = cantidad;
+    else appData.clases_profesor.push({ periodo, profesor_id: profesorId, cantidad });
+    saveData(appData);
+    refresh();
   });
 }
 
@@ -2170,6 +2247,7 @@ function renderAdmin(container) {
 
   const tabs = [
     { id: 'profesores', label: 'Profesores' },
+    { id: 'alquiler', label: 'Alquiler espacio' },
     { id: 'finanzas', label: 'Finanzas' },
     { id: 'unificar', label: 'Unificar duplicados' },
     { id: 'config', label: 'Configuración' },
@@ -2205,6 +2283,7 @@ function renderAdmin(container) {
       const contentDiv = document.getElementById('admin-content');
       contentDiv.innerHTML = '';
       if (adminSubPage === 'profesores') renderProfesores(contentDiv, { isAdmin: true });
+      else if (adminSubPage === 'alquiler') renderAlquiler(contentDiv);
       else if (adminSubPage === 'finanzas') renderFinanzas(contentDiv, { isAdmin: true });
       else if (adminSubPage === 'unificar') renderUnificar(contentDiv);
       else if (adminSubPage === 'config') renderConfig(contentDiv, { isAdmin: true });
@@ -2214,10 +2293,165 @@ function renderAdmin(container) {
 
   const contentDiv = document.getElementById('admin-content');
   if (adminSubPage === 'profesores') renderProfesores(contentDiv, { isAdmin: true });
+  else if (adminSubPage === 'alquiler') renderAlquiler(contentDiv);
   else if (adminSubPage === 'finanzas') renderFinanzas(contentDiv, { isAdmin: true });
   else if (adminSubPage === 'unificar') renderUnificar(contentDiv);
   else if (adminSubPage === 'config') renderConfig(contentDiv, { isAdmin: true });
   else if (adminSubPage === 'metricas') renderMetricas(contentDiv, { isAdmin: true });
+}
+
+// --- ALQUILER ESPACIO ---
+function renderAlquiler(container) {
+  const periodo = getPeriodoActual(appData);
+  const actividades = appData.actividades_alquiler || [];
+  const cobros = filtrarPorPeriodo15(appData.cobros_alquiler || [], periodo);
+
+  container.innerHTML = `
+    <div class="card">
+      <h2 class="card-title">Alquiler del espacio</h2>
+      <p style="color: var(--text-secondary); margin-bottom: 1rem;">
+        Actividades que usan el espacio (calistenia, taekwondo, zumba, yoga, etc.). Ellos cobran a sus alumnos y nos abonan un % o monto por el uso del lugar.
+      </p>
+      <form id="form-actividad-alquiler" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+        <div class="form-group">
+          <label>Actividad</label>
+          <input type="text" id="alq-actividad" placeholder="Ej: Calistenia, Yoga" required />
+        </div>
+        <div class="form-group">
+          <label>Responsable</label>
+          <input type="text" id="alq-responsable" placeholder="Nombre del instructor" />
+        </div>
+        <div class="form-group">
+          <label>Tipo de pago</label>
+          <select id="alq-tipo">
+            <option value="porcentaje">% de lo que cobran</option>
+            <option value="fijo">Monto fijo</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Valor (% o $)</label>
+          <input type="number" id="alq-valor" placeholder="Ej: 35 o 15000" min="0" step="0.01" />
+        </div>
+        <div class="form-group" style="align-self: flex-end;">
+          <button type="submit" class="btn btn-primary">Agregar</button>
+        </div>
+      </form>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Actividad</th><th>Responsable</th><th>Tipo</th><th>Valor</th><th></th></tr></thead>
+          <tbody>
+            ${actividades.map(a => `
+              <tr>
+                <td>${a.nombre}</td>
+                <td>${a.responsable || '-'}</td>
+                <td>${a.tipo === 'porcentaje' ? '%' : 'Fijo'}</td>
+                <td>${a.tipo === 'porcentaje' ? (a.valor || 0) + '%' : formatMoney(a.valor)}</td>
+                <td>
+                  <button type="button" class="btn btn-secondary btn-sm" data-edit-alq="${a.id}">Editar</button>
+                  <button type="button" class="btn btn-secondary btn-sm" data-del-alq="${a.id}">Eliminar</button>
+                </td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <h3 class="card-title">Registrar cobro de alquiler (período ${periodo})</h3>
+      <p style="color: var(--text-secondary); margin-bottom: 1rem;">Cuando nos abonan por el uso del espacio.</p>
+      <form id="form-cobro-alquiler" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
+        <div class="form-group">
+          <label>Fecha</label>
+          <input type="date" id="cobro-alq-fecha" value="${new Date().toISOString().slice(0, 10)}" />
+        </div>
+        <div class="form-group">
+          <label>Actividad</label>
+          <select id="cobro-alq-actividad">
+            <option value="">Seleccionar...</option>
+            ${actividades.map(a => `<option value="${a.nombre}">${a.nombre} (${a.responsable || '-'})</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Monto</label>
+          <input type="number" id="cobro-alq-monto" required placeholder="Ej: 25000" />
+        </div>
+        <div class="form-group">
+          <label>Observaciones</label>
+          <input type="text" id="cobro-alq-obs" placeholder="Opcional" />
+        </div>
+        <div class="form-group" style="align-self: flex-end;">
+          <button type="submit" class="btn btn-primary">Registrar cobro</button>
+        </div>
+      </form>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Fecha</th><th>Actividad</th><th>Monto</th><th>Obs.</th></tr></thead>
+          <tbody>
+            ${cobros.map(c => `
+              <tr><td>${formatDate(c.fecha)}</td><td>${c.actividad || '-'}</td><td>${formatMoney(c.monto)}</td><td>${c.observaciones || '-'}</td></tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('form-actividad-alquiler')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const nombre = document.getElementById('alq-actividad').value.trim();
+    const responsable = document.getElementById('alq-responsable').value.trim();
+    const tipo = document.getElementById('alq-tipo').value;
+    const valor = parseFloat(document.getElementById('alq-valor').value) || 0;
+    const editingId = document.getElementById('form-actividad-alquiler').dataset.editingId;
+    if (!appData.actividades_alquiler) appData.actividades_alquiler = [];
+    if (editingId) {
+      const a = appData.actividades_alquiler.find(x => x.id === editingId);
+      if (a) { a.nombre = nombre; a.responsable = responsable; a.tipo = tipo; a.valor = valor; }
+      document.getElementById('form-actividad-alquiler').dataset.editingId = '';
+      document.querySelector('#form-actividad-alquiler button[type="submit"]').textContent = 'Agregar';
+    } else {
+      appData.actividades_alquiler.push({ id: 'alq' + Date.now(), nombre, responsable, tipo, valor });
+    }
+    saveData(appData);
+    renderPage('admin');
+  });
+
+  document.getElementById('form-cobro-alquiler')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const fecha = document.getElementById('cobro-alq-fecha').value;
+    const actividad = document.getElementById('cobro-alq-actividad').value;
+    const monto = parseInt(document.getElementById('cobro-alq-monto').value, 10);
+    const obs = document.getElementById('cobro-alq-obs').value;
+    if (!actividad || !monto) return;
+    if (!appData.cobros_alquiler) appData.cobros_alquiler = [];
+    const periodoReal = getPeriodoDesdeFecha(fecha) || periodo;
+    appData.cobros_alquiler.push({ fecha, periodo: periodoReal, actividad, monto, observaciones: obs });
+    saveData(appData);
+    renderPage('admin');
+  });
+
+  container.querySelectorAll('[data-edit-alq]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const a = actividades.find(x => x.id === btn.dataset.editAlq);
+      if (!a) return;
+      document.getElementById('alq-actividad').value = a.nombre;
+      document.getElementById('alq-responsable').value = a.responsable || '';
+      document.getElementById('alq-tipo').value = a.tipo || 'porcentaje';
+      document.getElementById('alq-valor').value = a.valor ?? '';
+      document.getElementById('form-actividad-alquiler').dataset.editingId = a.id;
+      document.querySelector('#form-actividad-alquiler button[type="submit"]').textContent = 'Guardar';
+    });
+  });
+
+  container.querySelectorAll('[data-del-alq]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (confirm('¿Eliminar esta actividad de alquiler?')) {
+        appData.actividades_alquiler = (appData.actividades_alquiler || []).filter(a => a.id !== btn.dataset.delAlq);
+        saveData(appData);
+        renderPage('admin');
+      }
+    });
+  });
 }
 
 // --- UNIFICAR DUPLICADOS ---
@@ -2341,7 +2575,9 @@ function renderFinanzas(container, opts = {}) {
   });
   const ingresoCuotas = cuotas.reduce((s, c) => s + (c.monto || 0), 0);
   const ingresoVentas = ventas.reduce((s, v) => s + (v.cantidad || 1) * (v.precio || 0), 0);
-  const recaudado = ingresoCuotas + ingresoVentas;
+  const cobrosAlquiler = filtrarPorPeriodo15(appData.cobros_alquiler || [], periodo);
+  const ingresoAlquiler = cobrosAlquiler.reduce((s, c) => s + (c.monto || 0), 0);
+  const recaudado = ingresoCuotas + ingresoVentas + ingresoAlquiler;
 
   const pagosProf = appData.pagos_profesores || [];
   const pagosPeriodo = pagosProf.filter(p => p.periodo === periodo || fechaEnPeriodo15(p.fecha, periodo));
@@ -2364,6 +2600,14 @@ function renderFinanzas(container, opts = {}) {
       if (prof && pago > 0) liquidacion[prof.nombre] = (liquidacion[prof.nombre] || 0) + pago;
     }
   });
+  profesores.forEach(p => {
+    if (p.tipo_pago === 'fijo_mas_porcentaje') liquidacion[p.nombre] = (liquidacion[p.nombre] || 0) + (p.valor || 0);
+    if (p.tipo_pago === 'por_clase') {
+      const clases = (appData.clases_profesor || []).find(c => c.periodo === periodo && c.profesor_id === p.id);
+      const cant = clases?.cantidad || 0;
+      if (cant > 0) liquidacion[p.nombre] = (liquidacion[p.nombre] || 0) + (p.valor || 0) * cant;
+    }
+  });
 
   const pagosAdelantados = pagosProf.filter(p => p.adelantado);
 
@@ -2383,7 +2627,7 @@ function renderFinanzas(container, opts = {}) {
       <div class="stats-grid">
         <div class="stat-card">
           <div class="stat-value">${formatMoney(recaudado)}</div>
-          <div class="stat-label">Recaudado (cuotas + ventas)</div>
+          <div class="stat-label">Recaudado (cuotas + ventas + alquiler)</div>
         </div>
         <div class="stat-card">
           <div class="stat-value">${formatMoney(totalPagado)}</div>
@@ -2406,6 +2650,10 @@ function renderFinanzas(container, opts = {}) {
         <div class="stat-card">
           <div class="stat-value">${formatMoney(ingresoVentas)}</div>
           <div class="stat-label">Ventas</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">${formatMoney(ingresoAlquiler)}</div>
+          <div class="stat-label">Alquiler espacio</div>
         </div>
         ${Object.entries(porMetodo).map(([metodo, tot]) => `
           <div class="stat-card">
@@ -2527,7 +2775,7 @@ function renderFinanzas(container, opts = {}) {
                 <td>${p.nombre}</td>
                 <td>${p.actividad || '-'}</td>
                 <td>${TIPOS_PAGO_PROF.find(t => t.id === p.tipo_pago)?.label || p.tipo_pago}</td>
-                <td>${p.tipo_pago === 'sin_pago' ? '-' : (p.valor || 0) + (p.tipo_pago === 'porcentaje_salon' ? '%' : '')}</td>
+                <td>${p.tipo_pago === 'sin_pago' ? '-' : p.tipo_pago === 'fijo_mas_porcentaje' ? `$${p.valor || 0} + ${p.valor_porcentaje || 0}%` : (p.valor || 0) + (p.tipo_pago === 'porcentaje_salon' ? '%' : p.tipo_pago === 'por_clase' ? '/clase' : '')}</td>
               </tr>
             `).join('')}
           </tbody>

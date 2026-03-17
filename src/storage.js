@@ -18,6 +18,9 @@ export async function loadData() {
       if (!data.profesores) data.profesores = [];
       if (!data.rutinas) data.rutinas = [];
       if (!data.horario) data.horario = [];
+      if (!data.clases_profesor) data.clases_profesor = [];
+      if (!data.actividades_alquiler) data.actividades_alquiler = [];
+      if (!data.cobros_alquiler) data.cobros_alquiler = [];
       return data;
     }
   } catch (e) {
@@ -29,6 +32,9 @@ export async function loadData() {
         if (!data.profesores) data.profesores = [];
         if (!data.rutinas) data.rutinas = [];
         if (!data.horario) data.horario = [];
+        if (!data.clases_profesor) data.clases_profesor = [];
+        if (!data.actividades_alquiler) data.actividades_alquiler = [];
+        if (!data.cobros_alquiler) data.cobros_alquiler = [];
         return data;
       } catch (err) {
         console.warn('Error parsing localStorage', err);
@@ -85,6 +91,9 @@ function getEmptyData() {
     cuotas: [],
     gastos: [],
     pagos_profesores: [],
+    clases_profesor: [],
+    actividades_alquiler: [],
+    cobros_alquiler: [],
     horario: [],
     config: {
       periodo_actual: new Date().toISOString().slice(0, 7),
