@@ -4,14 +4,16 @@
  */
 
 /**
- * Obtiene el rango de fechas del período 15-15
- * periodo "2026-03" = desde 15/02 hasta 15/03 (o 16/03 según config)
+ * Obtiene el rango de fechas del período 15-14
+ * periodo "2026-03" (marzo) = desde 15/02 hasta 14/03
+ * periodo "2026-04" (abril) = desde 15/03 hasta 14/04
+ * Lo cobrado desde 15-03 va para pago abril; 15-02 al 14-03 para pago marzo
  */
-export function getRangoPeriodo15(periodo, diaFin = 16) {
+export function getRangoPeriodo15(periodo, diaFin = 14) {
   if (!periodo) return { inicio: null, fin: null };
   const [y, m] = periodo.split('-').map(Number);
   const inicio = new Date(y, m - 2, 15); // mes anterior, día 15
-  const fin = new Date(y, m - 1, diaFin); // mes actual, día 15 o 16
+  const fin = new Date(y, m - 1, diaFin); // mes actual, día 14 (fin del período)
   return {
     inicio: inicio.toISOString().slice(0, 10),
     fin: fin.toISOString().slice(0, 10)
@@ -29,7 +31,9 @@ export function fechaEnPeriodo15(fechaStr, periodo) {
 }
 
 /**
- * Obtiene el período 15-15 que contiene una fecha dada
+ * Obtiene el período 15-14 que contiene una fecha dada
+ * Si día < 15 → mes actual. Si día >= 15 → mes siguiente.
+ * Ej: 14/03 → marzo, 15/03 → abril
  */
 export function getPeriodoDesdeFecha(fechaStr) {
   if (!fechaStr) return null;
@@ -37,21 +41,21 @@ export function getPeriodoDesdeFecha(fechaStr) {
   const y = d.getFullYear();
   const m = d.getMonth() + 1;
   const dia = d.getDate();
-  if (dia < 16) return `${y}-${String(m).padStart(2, '0')}`;
+  if (dia < 15) return `${y}-${String(m).padStart(2, '0')}`;
   const nextM = m === 12 ? 1 : m + 1;
   const nextY = m === 12 ? y + 1 : y;
   return `${nextY}-${String(nextM).padStart(2, '0')}`;
 }
 
 /**
- * Obtiene el período 15-15 actual según la fecha de hoy
+ * Obtiene el período 15-14 actual según la fecha de hoy
  */
 export function getPeriodo15Actual() {
   const hoy = new Date();
   const d = hoy.getDate();
   const m = hoy.getMonth() + 1;
   const y = hoy.getFullYear();
-  if (d < 16) return `${y}-${String(m).padStart(2, '0')}`;
+  if (d < 15) return `${y}-${String(m).padStart(2, '0')}`;
   const nextM = m === 12 ? 1 : m + 1;
   const nextY = m === 12 ? y + 1 : y;
   return `${nextY}-${String(nextM).padStart(2, '0')}`;
@@ -99,4 +103,17 @@ export function formatDate(str) {
   if (!str) return '-';
   const d = new Date(str);
   return d.toLocaleDateString('es-AR');
+}
+
+/**
+ * Calcula la edad a partir de la fecha de nacimiento (YYYY-MM-DD)
+ */
+export function calcularEdad(fechaNacimiento) {
+  if (!fechaNacimiento) return null;
+  const hoy = new Date();
+  const nac = new Date(fechaNacimiento);
+  let edad = hoy.getFullYear() - nac.getFullYear();
+  const m = hoy.getMonth() - nac.getMonth();
+  if (m < 0 || (m === 0 && hoy.getDate() < nac.getDate())) edad--;
+  return edad >= 0 ? edad : null;
 }

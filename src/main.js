@@ -5,7 +5,7 @@
 
 import { loadData, saveData, getPeriodoActual, subscribeToDataUpdates } from './storage.js';
 import * as fingerprint from './fingerprint.js';
-import { calcularSemaforo, formatMoney, formatDate, getRangoPeriodo15, fechaEnPeriodo15, diasDesdePago, diasRestantes, getPeriodoDesdeFecha } from './utils.js';
+import { calcularSemaforo, formatMoney, formatDate, getRangoPeriodo15, fechaEnPeriodo15, diasDesdePago, diasRestantes, getPeriodoDesdeFecha, calcularEdad } from './utils.js';
 import { isAdminAutenticado, setAdminAutenticado, verificarClave, filtrarPorPeriodo15, getPeriodosDisponibles } from './finanzas.js';
 
 let appData = null;
@@ -288,6 +288,10 @@ function renderSocios(container) {
           <input type="text" id="socio-dni" placeholder="12345678 (acceso)" maxlength="15" />
         </div>
         <div class="form-group">
+          <label>Fecha de nacimiento</label>
+          <input type="date" id="socio-fecha-nacimiento" placeholder="YYYY-MM-DD" />
+        </div>
+        <div class="form-group">
           <label>Teléfono</label>
           <input type="tel" id="socio-telefono" placeholder="Ej: 11 1234-5678 o 54911 12345678" />
         </div>
@@ -348,6 +352,7 @@ function renderSocios(container) {
               <th>Estado</th>
               <th>Nombre</th>
               <th>Teléfono</th>
+              <th>Edad</th>
               <th>Actividad</th>
               <th>Días/sem</th>
               <th>Planillas</th>
@@ -383,11 +388,14 @@ function renderSocios(container) {
   }
 
   function renderRows(list) {
-    tbody.innerHTML = list.map(s => `
+    tbody.innerHTML = list.map(s => {
+      const edad = calcularEdad(s.fecha_nacimiento);
+      return `
       <tr>
         <td><span class="semaforo ${s._semaforo.clase}"><span class="semaforo-dot"></span>${s._semaforo.estado === 'activo' ? 'Al día' : s._semaforo.estado === 'por-vencer' ? `Vence en ${s._semaforo.dias}d` : 'Vencido'}</span></td>
         <td>${s.nombre}</td>
         <td>${s.telefono || '-'}</td>
+        <td>${edad !== null ? edad + ' años' : '-'}</td>
         <td>${s.actividad || '-'}</td>
         <td>${s.dias_semana || '-'}</td>
         <td>${(s.planilla_deslinde && s.planilla_medica) ? '✓' : (s.planilla_deslinde || s.planilla_medica) ? '⚠ Parcial' : '❌'}</td>
@@ -399,7 +407,8 @@ function renderSocios(container) {
           ${(s.telefono || '').replace(/\D/g, '').length >= 10 ? `<a href="${urlWhatsApp(s)}" target="_blank" class="btn btn-secondary btn-sm" title="Enviar WhatsApp">📱</a>` : ''}
         </td>
       </tr>
-    `).join('');
+    `;
+    }).join('');
     list.forEach(s => {
       const btnEditar = tbody.querySelector(`[data-editar="${s.id}"]`);
       if (btnEditar) btnEditar.addEventListener('click', () => abrirModalEditarSocio(s));
@@ -445,6 +454,7 @@ function leerFormSocio(periodo) {
     id: String(Date.now()),
     nombre: document.getElementById('socio-nombre').value.trim(),
     dni: (document.getElementById('socio-dni')?.value || '').trim(),
+    fecha_nacimiento: (document.getElementById('socio-fecha-nacimiento')?.value || '').trim() || undefined,
     telefono: (document.getElementById('socio-telefono')?.value || '').trim(),
     email: (document.getElementById('socio-email')?.value || '').trim(),
     direccion: (document.getElementById('socio-direccion')?.value || '').trim(),
@@ -482,6 +492,10 @@ function abrirModalEditarSocio(socio) {
           <div class="form-group">
             <label>DNI</label>
             <input type="text" name="dni" value="${socio.dni || ''}" />
+          </div>
+          <div class="form-group">
+            <label>Fecha de nacimiento</label>
+            <input type="date" name="fecha_nacimiento" value="${socio.fecha_nacimiento || ''}" />
           </div>
           <div class="form-group">
             <label>Teléfono</label>
@@ -580,6 +594,7 @@ function abrirModalEditarSocio(socio) {
     const form = e.target;
     socio.nombre = form.nombre.value.trim();
     socio.dni = form.dni.value.trim();
+    socio.fecha_nacimiento = (form.querySelector('[name="fecha_nacimiento"]')?.value || '').trim() || undefined;
     socio.telefono = form.telefono.value.trim();
     socio.email = form.email.value.trim();
     socio.direccion = form.direccion.value.trim();
@@ -678,9 +693,12 @@ async function abrirModalRegistrarHuella(socio) {
 // --- CUOTAS ---
 function renderCuotas(container) {
   const periodo = getPeriodoActual(appData);
+  const diaFin = appData?.config?.periodo_dia_fin ?? 14;
+  const { inicio, fin } = getRangoPeriodo15(periodo, diaFin);
   const socios = appData.socios || [];
   const cuotas = filtrarPorPeriodo15(appData.cuotas || [], periodo);
   const actividades = appData.actividades || [];
+  const periodosDisponibles = getPeriodosDisponibles(appData.cuotas || [], appData.ventas || []);
 
   const alumnosPorActividad = {};
   socios.forEach(s => {
@@ -759,7 +777,19 @@ function renderCuotas(container) {
     </div>
 
     <div class="card">
-      <h3 class="card-title">Pagos del período ${periodo} (15 a 15)</h3>
+      <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 1rem;">
+        <h3 class="card-title">Pagos del período ${periodo}</h3>
+        <div class="form-group" style="margin: 0;">
+          <label style="font-size: 0.85rem; color: var(--text-secondary);">Ver período</label>
+          <select id="cuota-periodo-select" style="min-width: 120px;">
+            ${periodosDisponibles.map(p => {
+              const r = getRangoPeriodo15(p, diaFin);
+              return `<option value="${p}" ${p === periodo ? 'selected' : ''}>${p} (${r.inicio} a ${r.fin})</option>`;
+            }).join('')}
+          </select>
+        </div>
+      </div>
+      <p style="color: var(--text-secondary); margin: -0.5rem 0 1rem 0; font-size: 0.9rem;">Rango: ${inicio} al ${fin}</p>
       <div class="table-wrap">
         <table>
           <thead>
@@ -831,6 +861,13 @@ function renderCuotas(container) {
   });
 
   document.getElementById('cuota-filtro-actividad')?.addEventListener('change', filtrarCuotasPorActividad);
+
+  document.getElementById('cuota-periodo-select')?.addEventListener('change', (e) => {
+    appData.config = appData.config || {};
+    appData.config.periodo_actual = e.target.value;
+    saveData(appData);
+    renderPage('cuotas');
+  });
 
   document.getElementById('form-cuota').addEventListener('submit', (e) => {
     e.preventDefault();
@@ -2288,7 +2325,7 @@ function renderFinanzas(container, opts = {}) {
   if (!isAdmin && !isAdminAutenticado()) return;
 
   const periodo = getPeriodoActual(appData);
-  const diaFin = appData?.config?.periodo_dia_fin || 16;
+  const diaFin = appData?.config?.periodo_dia_fin ?? 14;
   const { inicio, fin } = getRangoPeriodo15(periodo, diaFin);
   const cuotas = filtrarPorPeriodo15(appData.cuotas || [], periodo);
   const ventas = filtrarPorPeriodo15(appData.ventas || [], periodo);
@@ -2304,6 +2341,13 @@ function renderFinanzas(container, opts = {}) {
   });
   const ingresoCuotas = cuotas.reduce((s, c) => s + (c.monto || 0), 0);
   const ingresoVentas = ventas.reduce((s, v) => s + (v.cantidad || 1) * (v.precio || 0), 0);
+  const recaudado = ingresoCuotas + ingresoVentas;
+
+  const pagosProf = appData.pagos_profesores || [];
+  const pagosPeriodo = pagosProf.filter(p => p.periodo === periodo || fechaEnPeriodo15(p.fecha, periodo));
+  const pagosAbonados = pagosPeriodo.filter(p => p.abonado !== false);
+  const totalPagado = pagosAbonados.reduce((s, p) => s + (p.monto || 0), 0);
+  const balance = recaudado - totalPagado;
 
   const profesores = appData.profesores || [];
   const liquidacion = {};
@@ -2321,8 +2365,6 @@ function renderFinanzas(container, opts = {}) {
     }
   });
 
-  const pagosProf = appData.pagos_profesores || [];
-  const pagosPeriodo = pagosProf.filter(p => p.periodo === periodo || fechaEnPeriodo15(p.fecha, periodo));
   const pagosAdelantados = pagosProf.filter(p => p.adelantado);
 
   const periodos = getPeriodosDisponibles(appData.cuotas, appData.ventas);
@@ -2334,6 +2376,24 @@ function renderFinanzas(container, opts = {}) {
         ${!isAdmin ? '<button type="button" class="btn btn-secondary" id="cerrar-finanzas">Cerrar sesión</button>' : ''}
       </div>
       <p style="color: var(--text-secondary);">Período ${periodo}: ${inicio} al ${fin}</p>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">Balance del período</h3>
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-value">${formatMoney(recaudado)}</div>
+          <div class="stat-label">Recaudado (cuotas + ventas)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">${formatMoney(totalPagado)}</div>
+          <div class="stat-label">Pagado a profesores</div>
+        </div>
+        <div class="stat-card" style="${balance < 0 ? 'border-color: var(--semaforo-rojo);' : ''}">
+          <div class="stat-value" style="${balance < 0 ? 'color: var(--semaforo-rojo);' : ''}">${formatMoney(balance)}</div>
+          <div class="stat-label">Balance (recaudado − pagado)</div>
+        </div>
+      </div>
     </div>
 
     <div class="card">
@@ -2363,7 +2423,7 @@ function renderFinanzas(container, opts = {}) {
           <thead><tr><th>Profesor</th><th>Total período</th><th>Pagado</th><th>Pendiente</th></tr></thead>
           <tbody>
             ${Object.entries(liquidacion).map(([nom, tot]) => {
-              const pagado = (pagosPeriodo.filter(p => p.profesor === nom).reduce((s,p)=>s+(p.monto||0),0));
+              const pagado = (pagosAbonados.filter(p => p.profesor === nom).reduce((s,p)=>s+(p.monto||0),0));
               return `<tr><td>${nom}</td><td>${formatMoney(tot)}</td><td>${formatMoney(pagado)}</td><td>${formatMoney(tot - pagado)}</td></tr>`;
             }).join('')}
           </tbody>
@@ -2391,6 +2451,28 @@ function renderFinanzas(container, opts = {}) {
           <button type="submit" class="btn btn-primary">Registrar</button>
         </div>
       </form>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">Pagos a profesores — tildar lo abonado</h3>
+      <p style="color: var(--text-secondary); margin-bottom: 1rem;">Marcá los pagos que ya efectuaste para actualizar el balance.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Abonado</th><th>Fecha</th><th>Profesor</th><th>Monto</th><th>Adelantado</th></tr></thead>
+          <tbody id="pagos-prof-tbody">
+            ${pagosPeriodo.length ? pagosPeriodo.map((p, idx) => {
+              const globalIdx = (appData.pagos_profesores || []).findIndex(x => x === p);
+              return `<tr>
+                <td><input type="checkbox" class="pago-abonado-cb" data-idx="${globalIdx}" ${p.abonado !== false ? 'checked' : ''} title="Marcar si ya pagaste" /></td>
+                <td>${formatDate(p.fecha)}</td>
+                <td>${p.profesor || '-'}</td>
+                <td>${formatMoney(p.monto)}</td>
+                <td>${p.adelantado ? 'Sí' : '-'}</td>
+              </tr>`;
+            }).join('') : '<tr><td colspan="5" style="color: var(--text-secondary);">No hay pagos registrados en este período</td></tr>'}
+          </tbody>
+        </table>
+      </div>
     </div>
 
     <div class="card">
@@ -2478,10 +2560,23 @@ function renderFinanzas(container, opts = {}) {
       periodo,
       profesor: document.getElementById('pago-prof-nombre').value,
       monto: parseInt(document.getElementById('pago-prof-monto').value, 10),
-      adelantado: document.getElementById('pago-prof-adelantado').checked
+      adelantado: document.getElementById('pago-prof-adelantado').checked,
+      abonado: true
     });
     saveData(appData);
     renderPage(isAdmin ? 'admin' : 'finanzas');
+  });
+
+  container.querySelectorAll('.pago-abonado-cb').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const idx = parseInt(cb.dataset.idx, 10);
+      const pago = appData.pagos_profesores?.[idx];
+      if (pago) {
+        pago.abonado = cb.checked;
+        saveData(appData);
+        renderPage(isAdmin ? 'admin' : 'finanzas');
+      }
+    });
   });
 }
 
@@ -2498,8 +2593,8 @@ function renderConfig(container, opts = {}) {
           <input type="month" id="config-periodo" value="${config.periodo_actual || ''}" />
         </div>
         <div class="form-group">
-          <label>Día fin del período (15 o 16)</label>
-          <input type="number" id="config-periodo-dia" value="${config.periodo_dia_fin || 16}" min="15" max="16" />
+          <label>Día fin del período (14 = 15 al 14)</label>
+          <input type="number" id="config-periodo-dia" value="${config.periodo_dia_fin ?? 14}" min="14" max="16" />
         </div>
         <div class="form-group">
           <label>Tarifa luz (por unidad)</label>
@@ -2518,7 +2613,7 @@ function renderConfig(container, opts = {}) {
     e.preventDefault();
     appData.config = appData.config || {};
     appData.config.periodo_actual = document.getElementById('config-periodo').value;
-    appData.config.periodo_dia_fin = parseInt(document.getElementById('config-periodo-dia').value, 10) || 16;
+    appData.config.periodo_dia_fin = parseInt(document.getElementById('config-periodo-dia').value, 10) || 14;
     appData.config.tarifa_luz = parseFloat(document.getElementById('config-luz').value) || 1;
     appData.config.finanzas_clave = document.getElementById('config-finanzas-clave').value || 'admin';
     saveData(appData);
