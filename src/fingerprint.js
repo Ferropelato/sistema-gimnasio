@@ -108,47 +108,47 @@ export async function disconnect() {
   }
 }
 
-export async function getImage() {
+async function writeToPort(data) {
   if (!serialPort) throw new Error('Lector no conectado');
   const writer = serialPort.writable.getWriter();
-  await writer.write(buildPacket(CMD_GEN_IMG, []));
-  writer.release();
+  try {
+    await writer.write(data);
+  } finally {
+    writer.releaseLock();
+  }
+}
+
+export async function getImage() {
+  if (!serialPort) throw new Error('Lector no conectado');
+  await writeToPort(buildPacket(CMD_GEN_IMG, []));
   const res = await readResponse(5000);
   return res.confirmCode === 0;
 }
 
 export async function imageToTemplate(bufferSlot) {
   if (!serialPort) throw new Error('Lector no conectado');
-  const writer = serialPort.writable.getWriter();
-  await writer.write(buildPacket(CMD_IMG2TZ, [bufferSlot]));
-  writer.release();
+  await writeToPort(buildPacket(CMD_IMG2TZ, [bufferSlot]));
   const res = await readResponse(3000);
   return res.confirmCode === 0;
 }
 
 export async function createModel() {
   if (!serialPort) throw new Error('Lector no conectado');
-  const writer = serialPort.writable.getWriter();
-  await writer.write(buildPacket(CMD_REG_MODEL, []));
-  writer.release();
+  await writeToPort(buildPacket(CMD_REG_MODEL, []));
   const res = await readResponse(3000);
   return res.confirmCode === 0;
 }
 
 export async function storeTemplate(pageNumber) {
   if (!serialPort) throw new Error('Lector no conectado');
-  const writer = serialPort.writable.getWriter();
-  await writer.write(buildPacket(CMD_STORE, [(pageNumber >> 8) & 0xFF, pageNumber & 0xFF]));
-  writer.release();
+  await writeToPort(buildPacket(CMD_STORE, [(pageNumber >> 8) & 0xFF, pageNumber & 0xFF]));
   const res = await readResponse(3000);
   return res.confirmCode === 0;
 }
 
 export async function searchTemplate() {
   if (!serialPort) throw new Error('Lector no conectado');
-  const writer = serialPort.writable.getWriter();
-  await writer.write(buildPacket(CMD_SEARCH, [0x01, 0x00, 0x00, 0x03, 0xE8])); // Buffer 1, start 0, count 1000
-  writer.release();
+  await writeToPort(buildPacket(CMD_SEARCH, [0x01, 0x00, 0x00, 0x03, 0xE8])); // Buffer 1, start 0, count 1000
   const res = await readResponse(3000);
   if (res.confirmCode !== 0) return null;
   if (res.data.length >= 4) {
@@ -161,9 +161,7 @@ export async function searchTemplate() {
 
 export async function emptyDatabase() {
   if (!serialPort) throw new Error('Lector no conectado');
-  const writer = serialPort.writable.getWriter();
-  await writer.write(buildPacket(CMD_EMPTY, []));
-  writer.release();
+  await writeToPort(buildPacket(CMD_EMPTY, []));
   const res = await readResponse(5000);
   return res.confirmCode === 0;
 }
