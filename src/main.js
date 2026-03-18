@@ -5,7 +5,7 @@
 
 import { loadData, saveData, getPeriodoActual, subscribeToDataUpdates } from './storage.js';
 import * as fingerprint from './fingerprint.js';
-import { calcularSemaforo, formatMoney, formatDate, getRangoPeriodo15, fechaEnPeriodo15, diasDesdePago, diasRestantes, getPeriodoDesdeFecha, calcularEdad } from './utils.js';
+import { calcularSemaforo, formatMoney, formatDate, getRangoPeriodo15, fechaEnPeriodo15, getQuincenaEnPeriodo15, diasDesdePago, diasRestantes, getPeriodoDesdeFecha, calcularEdad } from './utils.js';
 import { isAdminAutenticado, setAdminAutenticado, verificarClave, filtrarPorPeriodo15, getPeriodosDisponibles } from './finanzas.js';
 
 let appData = null;
@@ -1303,9 +1303,9 @@ function renderProfesores(container, opts = {}) {
         </div>
         <div class="form-group">
           <label>Actividad</label>
-          <select id="prof-actividad">
-            ${(appData.actividades || []).map(a => `<option value="${a.nombre}">${a.nombre}</option>`).join('')}
-          </select>
+          <input type="text" id="prof-actividad" list="prof-actividades-list" placeholder="Ej: CrossFit, Yoga, Pilates..." />
+          <datalist id="prof-actividades-list">${(appData.actividades || []).map(a => `<option value="${a.nombre}">`).join('')}</datalist>
+          <small style="color: var(--text-secondary);">Podés elegir de la lista o escribir una actividad nueva</small>
         </div>
         <div class="form-group">
           <label>Tipo de pago</label>
@@ -2328,9 +2328,14 @@ function renderAlquiler(container) {
             <option value="fijo">Monto fijo</option>
           </select>
         </div>
-        <div class="form-group">
+        <div class="form-group" id="alq-valor-wrap">
           <label>Valor (% o $)</label>
           <input type="number" id="alq-valor" placeholder="Ej: 35 o 15000" min="0" step="0.01" />
+        </div>
+        <div class="form-group" id="alq-precio-alumno-wrap" style="display: none;">
+          <label>Precio por alumno ($)</label>
+          <input type="number" id="alq-precio-alumno" placeholder="Ej: 5000" min="0" />
+          <small style="color: var(--text-secondary);">Referencia: lo que cobra el profesor por clase</small>
         </div>
         <div class="form-group" style="align-self: flex-end;">
           <button type="submit" class="btn btn-primary">Agregar</button>
@@ -2338,7 +2343,7 @@ function renderAlquiler(container) {
       </form>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Actividad</th><th>Responsable</th><th>Tipo</th><th>Valor</th><th></th></tr></thead>
+          <thead><tr><th>Actividad</th><th>Responsable</th><th>Tipo</th><th>Valor</th><th>Precio/alumno</th><th></th></tr></thead>
           <tbody>
             ${actividades.map(a => `
               <tr>
@@ -2346,6 +2351,7 @@ function renderAlquiler(container) {
                 <td>${a.responsable || '-'}</td>
                 <td>${a.tipo === 'porcentaje' ? '%' : 'Fijo'}</td>
                 <td>${a.tipo === 'porcentaje' ? (a.valor || 0) + '%' : formatMoney(a.valor)}</td>
+                <td>${a.tipo === 'porcentaje' && a.precio_por_alumno ? formatMoney(a.precio_por_alumno) : '-'}</td>
                 <td>
                   <button type="button" class="btn btn-secondary btn-sm" data-edit-alq="${a.id}">Editar</button>
                   <button type="button" class="btn btn-secondary btn-sm" data-del-alq="${a.id}">Eliminar</button>
@@ -2358,7 +2364,7 @@ function renderAlquiler(container) {
     </div>
     <div class="card">
       <h3 class="card-title">Registrar cobro de alquiler (período ${periodo})</h3>
-      <p style="color: var(--text-secondary); margin-bottom: 1rem;">Cuando nos abonan por el uso del espacio.</p>
+      <p style="color: var(--text-secondary); margin-bottom: 1rem;">Cuando nos abonan por el uso del espacio. Para actividades con %: registrá cantidad de alumnos para calcular lo que corresponde.</p>
       <form id="form-cobro-alquiler" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
         <div class="form-group">
           <label>Fecha</label>
@@ -2368,12 +2374,21 @@ function renderAlquiler(container) {
           <label>Actividad</label>
           <select id="cobro-alq-actividad">
             <option value="">Seleccionar...</option>
-            ${actividades.map(a => `<option value="${a.nombre}">${a.nombre} (${a.responsable || '-'})</option>`).join('')}
+            ${actividades.map(a => `<option value="${a.nombre}" data-tipo="${a.tipo || ''}" data-valor="${a.valor || 0}" data-precio="${a.precio_por_alumno || ''}">${a.nombre} (${a.responsable || '-'})</option>`).join('')}
           </select>
         </div>
-        <div class="form-group">
-          <label>Monto</label>
+        <div class="form-group" id="cobro-alq-cantidad-wrap" style="display: none;">
+          <label>Cantidad de alumnos</label>
+          <input type="number" id="cobro-alq-cantidad" min="0" placeholder="Ej: 12" />
+        </div>
+        <div class="form-group" id="cobro-alq-precio-wrap" style="display: none;">
+          <label>Precio por alumno ($)</label>
+          <input type="number" id="cobro-alq-precio" min="0" placeholder="Ej: 5000" />
+        </div>
+        <div class="form-group" id="cobro-alq-monto-wrap">
+          <label>Monto a registrar</label>
           <input type="number" id="cobro-alq-monto" required placeholder="Ej: 25000" />
+          <span id="cobro-alq-calculado" style="color: var(--text-secondary); font-size: 0.9rem; display: block; margin-top: 0.25rem;"></span>
         </div>
         <div class="form-group">
           <label>Observaciones</label>
@@ -2385,10 +2400,10 @@ function renderAlquiler(container) {
       </form>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Fecha</th><th>Actividad</th><th>Monto</th><th>Obs.</th></tr></thead>
+          <thead><tr><th>Fecha</th><th>Actividad</th><th>Alumnos</th><th>Monto</th><th>Obs.</th></tr></thead>
           <tbody>
             ${cobros.map(c => `
-              <tr><td>${formatDate(c.fecha)}</td><td>${c.actividad || '-'}</td><td>${formatMoney(c.monto)}</td><td>${c.observaciones || '-'}</td></tr>
+              <tr><td>${formatDate(c.fecha)}</td><td>${c.actividad || '-'}</td><td>${c.cantidad_alumnos != null ? c.cantidad_alumnos : '-'}</td><td>${formatMoney(c.monto)}</td><td>${c.observaciones || '-'}</td></tr>
             `).join('')}
           </tbody>
         </table>
@@ -2396,25 +2411,70 @@ function renderAlquiler(container) {
     </div>
   `;
 
+  function toggleAlqPrecioAlumno() {
+    const tipo = document.getElementById('alq-tipo')?.value;
+    const wrap = document.getElementById('alq-precio-alumno-wrap');
+    if (wrap) wrap.style.display = tipo === 'porcentaje' ? 'block' : 'none';
+  }
+  document.getElementById('alq-tipo')?.addEventListener('change', toggleAlqPrecioAlumno);
+  toggleAlqPrecioAlumno();
+
   document.getElementById('form-actividad-alquiler')?.addEventListener('submit', (e) => {
     e.preventDefault();
     const nombre = document.getElementById('alq-actividad').value.trim();
     const responsable = document.getElementById('alq-responsable').value.trim();
     const tipo = document.getElementById('alq-tipo').value;
     const valor = parseFloat(document.getElementById('alq-valor').value) || 0;
+    const precio_por_alumno = tipo === 'porcentaje' ? (parseInt(document.getElementById('alq-precio-alumno')?.value, 10) || null) : null;
     const editingId = document.getElementById('form-actividad-alquiler').dataset.editingId;
     if (!appData.actividades_alquiler) appData.actividades_alquiler = [];
     if (editingId) {
       const a = appData.actividades_alquiler.find(x => x.id === editingId);
-      if (a) { a.nombre = nombre; a.responsable = responsable; a.tipo = tipo; a.valor = valor; }
+      if (a) { a.nombre = nombre; a.responsable = responsable; a.tipo = tipo; a.valor = valor; a.precio_por_alumno = precio_por_alumno; }
       document.getElementById('form-actividad-alquiler').dataset.editingId = '';
       document.querySelector('#form-actividad-alquiler button[type="submit"]').textContent = 'Agregar';
     } else {
-      appData.actividades_alquiler.push({ id: 'alq' + Date.now(), nombre, responsable, tipo, valor });
+      const nueva = { id: 'alq' + Date.now(), nombre, responsable, tipo, valor };
+      if (precio_por_alumno) nueva.precio_por_alumno = precio_por_alumno;
+      appData.actividades_alquiler.push(nueva);
     }
     saveData(appData);
     renderPage('admin');
   });
+
+  function actualizarCobroAlqCalculo() {
+    const sel = document.getElementById('cobro-alq-actividad');
+    const opt = sel?.options[sel.selectedIndex];
+    const tipo = opt?.dataset?.tipo || '';
+    const valor = parseFloat(opt?.dataset?.valor || 0);
+    const precioRef = parseFloat(opt?.dataset?.precio || 0);
+    const cantidadWrap = document.getElementById('cobro-alq-cantidad-wrap');
+    const precioWrap = document.getElementById('cobro-alq-precio-wrap');
+    const calcEl = document.getElementById('cobro-alq-calculado');
+    const precioInp = document.getElementById('cobro-alq-precio');
+    if (tipo === 'porcentaje') {
+      if (cantidadWrap) cantidadWrap.style.display = 'block';
+      if (precioWrap) precioWrap.style.display = 'block';
+      if (precioInp && !precioInp.value && precioRef) precioInp.value = precioRef;
+      const cantidad = parseInt(document.getElementById('cobro-alq-cantidad')?.value, 10) || 0;
+      const precio = parseInt(document.getElementById('cobro-alq-precio')?.value, 10) || precioRef || 0;
+      if (cantidad > 0 && precio > 0 && valor > 0 && calcEl) {
+        const totalRecaudado = cantidad * precio;
+        const loCorresponde = Math.round(totalRecaudado * valor / 100);
+        calcEl.textContent = `Lo que corresponde (${cantidad} × $${precio} × ${valor}%): ${formatMoney(loCorresponde)}`;
+        const montoInp = document.getElementById('cobro-alq-monto');
+        if (montoInp) montoInp.value = loCorresponde;
+      } else if (calcEl) calcEl.textContent = 'Completá cantidad y precio para ver el cálculo';
+    } else {
+      if (cantidadWrap) cantidadWrap.style.display = 'none';
+      if (precioWrap) precioWrap.style.display = 'none';
+      if (calcEl) calcEl.textContent = '';
+    }
+  }
+  document.getElementById('cobro-alq-actividad')?.addEventListener('change', actualizarCobroAlqCalculo);
+  document.getElementById('cobro-alq-cantidad')?.addEventListener('input', actualizarCobroAlqCalculo);
+  document.getElementById('cobro-alq-precio')?.addEventListener('input', actualizarCobroAlqCalculo);
+  actualizarCobroAlqCalculo();
 
   document.getElementById('form-cobro-alquiler')?.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -2422,10 +2482,13 @@ function renderAlquiler(container) {
     const actividad = document.getElementById('cobro-alq-actividad').value;
     const monto = parseInt(document.getElementById('cobro-alq-monto').value, 10);
     const obs = document.getElementById('cobro-alq-obs').value;
+    const cantidadAlumnos = parseInt(document.getElementById('cobro-alq-cantidad')?.value, 10) || null;
     if (!actividad || !monto) return;
     if (!appData.cobros_alquiler) appData.cobros_alquiler = [];
     const periodoReal = getPeriodoDesdeFecha(fecha) || periodo;
-    appData.cobros_alquiler.push({ fecha, periodo: periodoReal, actividad, monto, observaciones: obs });
+    const cobro = { fecha, periodo: periodoReal, actividad, monto, observaciones: obs };
+    if (cantidadAlumnos != null) cobro.cantidad_alumnos = cantidadAlumnos;
+    appData.cobros_alquiler.push(cobro);
     saveData(appData);
     renderPage('admin');
   });
@@ -2438,6 +2501,8 @@ function renderAlquiler(container) {
       document.getElementById('alq-responsable').value = a.responsable || '';
       document.getElementById('alq-tipo').value = a.tipo || 'porcentaje';
       document.getElementById('alq-valor').value = a.valor ?? '';
+      document.getElementById('alq-precio-alumno').value = a.precio_por_alumno ?? '';
+      toggleAlqPrecioAlumno();
       document.getElementById('form-actividad-alquiler').dataset.editingId = a.id;
       document.querySelector('#form-actividad-alquiler button[type="submit"]').textContent = 'Guardar';
     });
@@ -2583,7 +2648,17 @@ function renderFinanzas(container, opts = {}) {
   const pagosPeriodo = pagosProf.filter(p => p.periodo === periodo || fechaEnPeriodo15(p.fecha, periodo));
   const pagosAbonados = pagosPeriodo.filter(p => p.abonado !== false);
   const totalPagado = pagosAbonados.reduce((s, p) => s + (p.monto || 0), 0);
-  const balance = recaudado - totalPagado;
+
+  const gastosPeriodo = filtrarPorPeriodo15(appData.gastos || [], periodo);
+  const totalGastos = gastosPeriodo.reduce((s, g) => s + (g.monto || 0), 0);
+  const balance = recaudado - totalPagado - totalGastos;
+
+  const cuotasQ1 = cuotas.filter(c => getQuincenaEnPeriodo15(c.fecha, periodo, diaFin) === 1);
+  const cuotasQ2 = cuotas.filter(c => getQuincenaEnPeriodo15(c.fecha, periodo, diaFin) === 2);
+  const ventasQ1 = ventas.filter(v => getQuincenaEnPeriodo15(v.fecha, periodo, diaFin) === 1);
+  const ventasQ2 = ventas.filter(v => getQuincenaEnPeriodo15(v.fecha, periodo, diaFin) === 2);
+  const ingresoQ1 = cuotasQ1.reduce((s, c) => s + (c.monto || 0), 0) + ventasQ1.reduce((s, v) => s + (v.cantidad || 1) * (v.precio || 0), 0);
+  const ingresoQ2 = cuotasQ2.reduce((s, c) => s + (c.monto || 0), 0) + ventasQ2.reduce((s, v) => s + (v.cantidad || 1) * (v.precio || 0), 0);
 
   const profesores = appData.profesores || [];
   const liquidacion = {};
@@ -2633,9 +2708,32 @@ function renderFinanzas(container, opts = {}) {
           <div class="stat-value">${formatMoney(totalPagado)}</div>
           <div class="stat-label">Pagado a profesores</div>
         </div>
+        <div class="stat-card">
+          <div class="stat-value">${formatMoney(totalGastos)}</div>
+          <div class="stat-label">Otros gastos (alquiler, luz, etc.)</div>
+        </div>
         <div class="stat-card" style="${balance < 0 ? 'border-color: var(--semaforo-rojo);' : ''}">
           <div class="stat-value" style="${balance < 0 ? 'color: var(--semaforo-rojo);' : ''}">${formatMoney(balance)}</div>
-          <div class="stat-label">Balance (recaudado − pagado)</div>
+          <div class="stat-label">Balance (recaudado − pagados − gastos)</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">Ingresos por quincena (cortes al 15)</h3>
+      <p style="color: var(--text-secondary); margin-bottom: 1rem;">Desglose de cuotas y ventas: 1ª quincena (15 al 28/29) y 2ª quincena (1 al 14).</p>
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-value">${formatMoney(ingresoQ1)}</div>
+          <div class="stat-label">1ª quincena (del 15 al fin de mes)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">${formatMoney(ingresoQ2)}</div>
+          <div class="stat-label">2ª quincena (del 1 al 14)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">${formatMoney(ingresoQ1 + ingresoQ2)}</div>
+          <div class="stat-label">Total período</div>
         </div>
       </div>
     </div>
@@ -2685,7 +2783,12 @@ function renderFinanzas(container, opts = {}) {
         <div class="form-group">
           <label>Profesor</label>
           <select id="pago-prof-nombre">
-            ${[...new Set(Object.keys(liquidacion))].map(n => `<option value="${n}">${n}</option>`).join('')}
+            ${(() => {
+              const opts = (profesores || []).length
+                ? profesores.map(p => `<option value="${p.nombre}">${p.nombre}${p.actividad ? ' (' + p.actividad + ')' : ''}</option>`)
+                : [...new Set([...Object.keys(liquidacion), ...(appData.pagos_profesores || []).map(p => p.profesor).filter(Boolean)])].map(n => `<option value="${n}">${n}</option>`);
+              return opts.length ? opts.join('') : '<option value="">Agregá profesores en Administración</option>';
+            })()}
           </select>
         </div>
         <div class="form-group">
@@ -2702,22 +2805,78 @@ function renderFinanzas(container, opts = {}) {
     </div>
 
     <div class="card">
-      <h3 class="card-title">Pagos a profesores — tildar lo abonado</h3>
-      <p style="color: var(--text-secondary); margin-bottom: 1rem;">Marcá los pagos que ya efectuaste para actualizar el balance.</p>
+      <h3 class="card-title">Pagos a profesores — tildar lo abonado / editar</h3>
+      <p style="color: var(--text-secondary); margin-bottom: 1rem;">Marcá los pagos que ya efectuaste. Clic en Editar para modificar fecha, profesor o monto.</p>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Abonado</th><th>Fecha</th><th>Profesor</th><th>Monto</th><th>Adelantado</th></tr></thead>
+          <thead><tr><th>Abonado</th><th>Fecha</th><th>Profesor</th><th>Monto</th><th>Adelantado</th><th></th></tr></thead>
           <tbody id="pagos-prof-tbody">
             ${pagosPeriodo.length ? pagosPeriodo.map((p, idx) => {
               const globalIdx = (appData.pagos_profesores || []).findIndex(x => x === p);
-              return `<tr>
+              return `<tr data-pago-idx="${globalIdx}">
                 <td><input type="checkbox" class="pago-abonado-cb" data-idx="${globalIdx}" ${p.abonado !== false ? 'checked' : ''} title="Marcar si ya pagaste" /></td>
                 <td>${formatDate(p.fecha)}</td>
                 <td>${p.profesor || '-'}</td>
                 <td>${formatMoney(p.monto)}</td>
                 <td>${p.adelantado ? 'Sí' : '-'}</td>
+                <td><button type="button" class="btn btn-secondary btn-sm pago-edit-btn" data-idx="${globalIdx}">Editar</button></td>
               </tr>`;
-            }).join('') : '<tr><td colspan="5" style="color: var(--text-secondary);">No hay pagos registrados en este período</td></tr>'}
+            }).join('') : '<tr><td colspan="6" style="color: var(--text-secondary);">No hay pagos registrados en este período</td></tr>'}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">Otros gastos del lugar</h3>
+      <p style="color: var(--text-secondary); margin-bottom: 1rem;">Alquiler, luz, gas, mantenimiento y otros gastos fijos del gimnasio.</p>
+      <form id="form-gasto" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
+        <div class="form-group">
+          <label>Categoría</label>
+          <select id="gasto-categoria">
+            <option value="Alquiler">Alquiler</option>
+            <option value="Luz">Luz</option>
+            <option value="Gas">Gas</option>
+            <option value="Agua">Agua</option>
+            <option value="Internet">Internet</option>
+            <option value="Mantenimiento">Mantenimiento</option>
+            <option value="Limpieza">Limpieza</option>
+            <option value="Otros">Otros</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Concepto</label>
+          <input type="text" id="gasto-concepto" placeholder="Ej: Factura marzo" />
+        </div>
+        <div class="form-group">
+          <label>Monto</label>
+          <input type="number" id="gasto-monto" required min="0" />
+        </div>
+        <div class="form-group">
+          <label>Fecha</label>
+          <input type="date" id="gasto-fecha" value="${new Date().toISOString().slice(0, 10)}" />
+        </div>
+        <div class="form-group" style="align-self: flex-end;">
+          <button type="submit" class="btn btn-primary">Agregar gasto</button>
+        </div>
+      </form>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Fecha</th><th>Categoría</th><th>Concepto</th><th>Monto</th><th></th></tr></thead>
+          <tbody>
+            ${gastosPeriodo.length ? gastosPeriodo.map((g, idx) => {
+              const globalIdx = (appData.gastos || []).findIndex(x => x === g);
+              return `<tr data-gasto-idx="${globalIdx}">
+                <td>${formatDate(g.fecha)}</td>
+                <td>${g.categoria || '-'}</td>
+                <td>${g.concepto || '-'}</td>
+                <td>${formatMoney(g.monto)}</td>
+                <td>
+                  <button type="button" class="btn btn-secondary btn-sm gasto-edit-btn" data-idx="${globalIdx}">Editar</button>
+                  <button type="button" class="btn btn-secondary btn-sm gasto-del-btn" data-idx="${globalIdx}">Eliminar</button>
+                </td>
+              </tr>`;
+            }).join('') : '<tr><td colspan="5" style="color: var(--text-secondary);">No hay gastos en este período</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -2792,21 +2951,28 @@ function renderFinanzas(container, opts = {}) {
   const actualizarResumenPeriodo = (p) => {
     const c = filtrarPorPeriodo15(appData.cuotas || [], p);
     const v = filtrarPorPeriodo15(appData.ventas || [], p);
+    const g = filtrarPorPeriodo15(appData.gastos || [], p);
     const ic = c.reduce((s, x) => s + (x.monto || 0), 0);
     const iv = v.reduce((s, x) => s + (x.cantidad || 1) * (x.precio || 0), 0);
+    const ig = g.reduce((s, x) => s + (x.monto || 0), 0);
     const el = document.getElementById('resumen-periodo-fin');
-    if (el) el.innerHTML = `<p>Cuotas: ${formatMoney(ic)} | Ventas: ${formatMoney(iv)} | Total: ${formatMoney(ic + iv)}</p>`;
+    if (el) el.innerHTML = `<p>Cuotas: ${formatMoney(ic)} | Ventas: ${formatMoney(iv)} | Gastos: ${formatMoney(ig)} | Total ingresos: ${formatMoney(ic + iv)} | Balance: ${formatMoney(ic + iv - ig)}</p>`;
   };
   document.getElementById('select-periodo-fin')?.addEventListener('change', (e) => actualizarResumenPeriodo(e.target.value));
   actualizarResumenPeriodo(periodo);
 
   document.getElementById('form-pago-prof')?.addEventListener('submit', (e) => {
     e.preventDefault();
+    const profesor = document.getElementById('pago-prof-nombre').value?.trim();
+    if (!profesor) {
+      mostrarToast('Seleccioná un profesor. Si no hay profesores, agregá primero en Administración → Profesores.');
+      return;
+    }
     if (!appData.pagos_profesores) appData.pagos_profesores = [];
     appData.pagos_profesores.push({
       fecha: new Date().toISOString().slice(0, 10),
       periodo,
-      profesor: document.getElementById('pago-prof-nombre').value,
+      profesor,
       monto: parseInt(document.getElementById('pago-prof-monto').value, 10),
       adelantado: document.getElementById('pago-prof-adelantado').checked,
       abonado: true
@@ -2826,6 +2992,163 @@ function renderFinanzas(container, opts = {}) {
       }
     });
   });
+
+  container.querySelectorAll('.pago-edit-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      const pago = appData.pagos_profesores?.[idx];
+      if (!pago) return;
+      abrirModalEditarPagoProfesor(pago, () => {
+        saveData(appData);
+        renderPage(isAdmin ? 'admin' : 'finanzas');
+      });
+    });
+  });
+
+  document.getElementById('form-gasto')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (!appData.gastos) appData.gastos = [];
+    const fecha = document.getElementById('gasto-fecha').value || new Date().toISOString().slice(0, 10);
+    appData.gastos.push({
+      fecha,
+      periodo: getPeriodoDesdeFecha(fecha),
+      categoria: document.getElementById('gasto-categoria').value,
+      concepto: document.getElementById('gasto-concepto').value.trim() || document.getElementById('gasto-categoria').value,
+      monto: parseInt(document.getElementById('gasto-monto').value, 10) || 0
+    });
+    saveData(appData);
+    renderPage(isAdmin ? 'admin' : 'finanzas');
+  });
+
+  container.querySelectorAll('.gasto-edit-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      const gasto = appData.gastos?.[idx];
+      if (!gasto) return;
+      abrirModalEditarGasto(gasto, () => {
+        saveData(appData);
+        renderPage(isAdmin ? 'admin' : 'finanzas');
+      });
+    });
+  });
+
+  container.querySelectorAll('.gasto-del-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.idx, 10);
+      if (confirm('¿Eliminar este gasto?')) {
+        appData.gastos.splice(idx, 1);
+        saveData(appData);
+        renderPage(isAdmin ? 'admin' : 'finanzas');
+      }
+    });
+  });
+}
+
+function abrirModalEditarPagoProfesor(pago, onGuardar) {
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay';
+  const profesores = appData.profesores || [];
+  const opcionesProf = profesores.length
+    ? profesores.map(p => ({ nombre: p.nombre, actividad: p.actividad || '' }))
+    : [...new Set((appData.pagos_profesores || []).map(p => p.profesor).filter(Boolean))].map(n => ({ nombre: n, actividad: '' }));
+  modal.innerHTML = `
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Editar pago a profesor</h3>
+        <button type="button" class="btn-cerrar" aria-label="Cerrar">&times;</button>
+      </div>
+      <form id="form-editar-pago-prof" class="modal-body">
+        <div class="form-group">
+          <label>Fecha</label>
+          <input type="date" id="pago-edit-fecha" value="${(pago.fecha || '').slice(0, 10)}" required />
+        </div>
+        <div class="form-group">
+          <label>Profesor</label>
+          <select id="pago-edit-profesor">
+            ${opcionesProf.map(o => `<option value="${o.nombre}" ${o.nombre === pago.profesor ? 'selected' : ''}>${o.nombre}${o.actividad ? ' (' + o.actividad + ')' : ''}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Monto</label>
+          <input type="number" id="pago-edit-monto" value="${pago.monto || 0}" required />
+        </div>
+        <div class="form-group">
+          <label><input type="checkbox" id="pago-edit-adelantado" ${pago.adelantado ? 'checked' : ''} /> Adelantado</label>
+        </div>
+        <div class="form-group">
+          <label><input type="checkbox" id="pago-edit-abonado" ${pago.abonado !== false ? 'checked' : ''} /> Abonado</label>
+        </div>
+        <div class="modal-footer" style="margin-top: 1rem;">
+          <button type="submit" class="btn btn-primary">Guardar</button>
+        </div>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  modal.querySelector('.btn-cerrar').onclick = () => modal.remove();
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+  modal.querySelector('#form-editar-pago-prof').onsubmit = (e) => {
+    e.preventDefault();
+    pago.fecha = modal.querySelector('#pago-edit-fecha').value;
+    pago.profesor = modal.querySelector('#pago-edit-profesor').value;
+    pago.monto = parseInt(modal.querySelector('#pago-edit-monto').value, 10) || 0;
+    pago.adelantado = modal.querySelector('#pago-edit-adelantado').checked;
+    pago.abonado = modal.querySelector('#pago-edit-abonado').checked;
+    pago.periodo = getPeriodoDesdeFecha(pago.fecha);
+    modal.remove();
+    if (onGuardar) onGuardar();
+  };
+}
+
+const CATEGORIAS_GASTO = ['Alquiler', 'Luz', 'Gas', 'Agua', 'Internet', 'Mantenimiento', 'Limpieza', 'Otros'];
+
+function abrirModalEditarGasto(gasto, onGuardar) {
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay';
+  modal.innerHTML = `
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Editar gasto</h3>
+        <button type="button" class="btn-cerrar" aria-label="Cerrar">&times;</button>
+      </div>
+      <form id="form-editar-gasto" class="modal-body">
+        <div class="form-group">
+          <label>Fecha</label>
+          <input type="date" id="gasto-edit-fecha" value="${(gasto.fecha || '').slice(0, 10)}" required />
+        </div>
+        <div class="form-group">
+          <label>Categoría</label>
+          <select id="gasto-edit-categoria">
+            ${CATEGORIAS_GASTO.map(c => `<option value="${c}" ${c === (gasto.categoria || '') ? 'selected' : ''}>${c}</option>`).join('')}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Concepto</label>
+          <input type="text" id="gasto-edit-concepto" value="${gasto.concepto || ''}" placeholder="Ej: Factura marzo" />
+        </div>
+        <div class="form-group">
+          <label>Monto</label>
+          <input type="number" id="gasto-edit-monto" value="${gasto.monto || 0}" required min="0" />
+        </div>
+        <div class="modal-footer" style="margin-top: 1rem;">
+          <button type="submit" class="btn btn-primary">Guardar</button>
+        </div>
+      </form>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  modal.querySelector('.btn-cerrar').onclick = () => modal.remove();
+  modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+  modal.querySelector('#form-editar-gasto').onsubmit = (e) => {
+    e.preventDefault();
+    gasto.fecha = modal.querySelector('#gasto-edit-fecha').value;
+    gasto.categoria = modal.querySelector('#gasto-edit-categoria').value;
+    gasto.concepto = modal.querySelector('#gasto-edit-concepto').value.trim() || gasto.categoria;
+    gasto.monto = parseInt(modal.querySelector('#gasto-edit-monto').value, 10) || 0;
+    gasto.periodo = getPeriodoDesdeFecha(gasto.fecha);
+    modal.remove();
+    if (onGuardar) onGuardar();
+  };
 }
 
 // --- CONFIG ---

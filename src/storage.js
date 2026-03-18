@@ -21,6 +21,7 @@ export async function loadData() {
       if (!data.clases_profesor) data.clases_profesor = [];
       if (!data.actividades_alquiler) data.actividades_alquiler = [];
       if (!data.cobros_alquiler) data.cobros_alquiler = [];
+      if (!data.gastos) data.gastos = [];
       return data;
     }
   } catch (e) {
@@ -35,6 +36,7 @@ export async function loadData() {
         if (!data.clases_profesor) data.clases_profesor = [];
         if (!data.actividades_alquiler) data.actividades_alquiler = [];
         if (!data.cobros_alquiler) data.cobros_alquiler = [];
+        if (!data.gastos) data.gastos = [];
         return data;
       } catch (err) {
         console.warn('Error parsing localStorage', err);
@@ -120,6 +122,7 @@ export function subscribeToDataUpdates(callback) {
         if (!data.profesores) data.profesores = [];
         if (!data.rutinas) data.rutinas = [];
         if (!data.horario) data.horario = [];
+        if (!data.gastos) data.gastos = [];
         callback(data);
       }
     });

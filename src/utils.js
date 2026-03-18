@@ -31,6 +31,21 @@ export function fechaEnPeriodo15(fechaStr, periodo) {
 }
 
 /**
+ * Indica si una fecha está en la 1ª quincena del período (del 15 al 28/29)
+ * o en la 2ª quincena (del 1 al 14). Retorna 1 o 2, o 0 si no está en el período.
+ */
+export function getQuincenaEnPeriodo15(fechaStr, periodo, diaFin = 14) {
+  if (!fechaStr || !periodo) return 0;
+  const { inicio, fin } = getRangoPeriodo15(periodo, diaFin);
+  const f = (fechaStr + '').slice(0, 10);
+  if (f < inicio || f > fin) return 0;
+  const [yi, mi] = inicio.split('-').map(Number);
+  const ultimoDiaMes1 = new Date(yi, mi, 0).getDate();
+  const finQuincena1 = `${yi}-${String(mi).padStart(2, '0')}-${String(ultimoDiaMes1).padStart(2, '0')}`;
+  return f <= finQuincena1 ? 1 : 2;
+}
+
+/**
  * Obtiene el período 15-14 que contiene una fecha dada
  * Si día < 15 → mes actual. Si día >= 15 → mes siguiente.
  * Ej: 14/03 → marzo, 15/03 → abril
