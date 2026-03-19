@@ -63,6 +63,17 @@ export function getPeriodoDesdeFecha(fechaStr) {
 }
 
 /**
+ * Obtiene el período anterior (para pago profesores a mes vencido)
+ * periodo "2026-03" → "2026-02"
+ */
+export function getPeriodoAnterior(periodo) {
+  if (!periodo) return null;
+  const [y, m] = periodo.split('-').map(Number);
+  if (m === 1) return `${y - 1}-12`;
+  return `${y}-${String(m - 1).padStart(2, '0')}`;
+}
+
+/**
  * Obtiene el período 15-14 actual según la fecha de hoy
  */
 export function getPeriodo15Actual() {

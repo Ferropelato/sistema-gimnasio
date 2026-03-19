@@ -5,7 +5,7 @@
 
 import { loadData, saveData, getPeriodoActual, subscribeToDataUpdates } from './storage.js';
 import * as fingerprint from './fingerprint.js';
-import { calcularSemaforo, formatMoney, formatDate, getRangoPeriodo15, fechaEnPeriodo15, getQuincenaEnPeriodo15, diasDesdePago, diasRestantes, getPeriodoDesdeFecha, calcularEdad } from './utils.js';
+import { calcularSemaforo, formatMoney, formatDate, getRangoPeriodo15, fechaEnPeriodo15, diasDesdePago, diasRestantes, getPeriodoDesdeFecha, getPeriodoAnterior, calcularEdad } from './utils.js';
 import { isAdminAutenticado, setAdminAutenticado, verificarClave, filtrarPorPeriodo15, getPeriodosDisponibles } from './finanzas.js';
 
 let appData = null;
@@ -2629,6 +2629,12 @@ function renderFinanzas(container, opts = {}) {
   const cuotas = filtrarPorPeriodo15(appData.cuotas || [], periodo);
   const ventas = filtrarPorPeriodo15(appData.ventas || [], periodo);
 
+  // Pago profesores a mes vencido: liquidación se calcula con recaudado del período ANTERIOR
+  const periodoAnterior = getPeriodoAnterior(periodo);
+  const cuotasPeriodoAnterior = filtrarPorPeriodo15(appData.cuotas || [], periodoAnterior);
+  const ventasPeriodoAnterior = filtrarPorPeriodo15(appData.ventas || [], periodoAnterior);
+  const cobrosAlqAnterior = filtrarPorPeriodo15(appData.cobros_alquiler || [], periodoAnterior);
+
   const porMetodo = {};
   cuotas.forEach(c => {
     const m = c.metodo || 'Sin especificar';
@@ -2650,19 +2656,21 @@ function renderFinanzas(container, opts = {}) {
   const totalPagado = pagosAbonados.reduce((s, p) => s + (p.monto || 0), 0);
 
   const gastosPeriodo = filtrarPorPeriodo15(appData.gastos || [], periodo);
+  const gastosPagados = gastosPeriodo.filter(g => g.pagado !== false);
+  const gastosPendientes = gastosPeriodo.filter(g => g.pagado === false);
   const totalGastos = gastosPeriodo.reduce((s, g) => s + (g.monto || 0), 0);
+  const totalGastosPagados = gastosPagados.reduce((s, g) => s + (g.monto || 0), 0);
+  const totalGastosPendientes = gastosPendientes.reduce((s, g) => s + (g.monto || 0), 0);
   const balance = recaudado - totalPagado - totalGastos;
 
-  const cuotasQ1 = cuotas.filter(c => getQuincenaEnPeriodo15(c.fecha, periodo, diaFin) === 1);
-  const cuotasQ2 = cuotas.filter(c => getQuincenaEnPeriodo15(c.fecha, periodo, diaFin) === 2);
-  const ventasQ1 = ventas.filter(v => getQuincenaEnPeriodo15(v.fecha, periodo, diaFin) === 1);
-  const ventasQ2 = ventas.filter(v => getQuincenaEnPeriodo15(v.fecha, periodo, diaFin) === 2);
-  const ingresoQ1 = cuotasQ1.reduce((s, c) => s + (c.monto || 0), 0) + ventasQ1.reduce((s, v) => s + (v.cantidad || 1) * (v.precio || 0), 0);
-  const ingresoQ2 = cuotasQ2.reduce((s, c) => s + (c.monto || 0), 0) + ventasQ2.reduce((s, v) => s + (v.cantidad || 1) * (v.precio || 0), 0);
+  const recaudadoPeriodoAnterior = cuotasPeriodoAnterior.reduce((s, c) => s + (c.monto || 0), 0)
+    + ventasPeriodoAnterior.reduce((s, v) => s + (v.cantidad || 1) * (v.precio || 0), 0)
+    + cobrosAlqAnterior.reduce((s, c) => s + (c.monto || 0), 0);
 
   const profesores = appData.profesores || [];
   const liquidacion = {};
-  cuotas.forEach(c => {
+  // Liquidación profesores: se calcula con recaudado del período ANTERIOR (pago a mes vencido)
+  cuotasPeriodoAnterior.forEach(c => {
     const acts = (c.actividad || '').split(',').map(a => a.trim()).filter(Boolean);
     acts.forEach(act => {
       const prof = profesores.find(p => p.actividad === act);
@@ -2678,7 +2686,7 @@ function renderFinanzas(container, opts = {}) {
   profesores.forEach(p => {
     if (p.tipo_pago === 'fijo_mas_porcentaje') liquidacion[p.nombre] = (liquidacion[p.nombre] || 0) + (p.valor || 0);
     if (p.tipo_pago === 'por_clase') {
-      const clases = (appData.clases_profesor || []).find(c => c.periodo === periodo && c.profesor_id === p.id);
+      const clases = (appData.clases_profesor || []).find(c => c.periodo === periodoAnterior && c.profesor_id === p.id);
       const cant = clases?.cantidad || 0;
       if (cant > 0) liquidacion[p.nombre] = (liquidacion[p.nombre] || 0) + (p.valor || 0) * cant;
     }
@@ -2699,10 +2707,15 @@ function renderFinanzas(container, opts = {}) {
 
     <div class="card">
       <h3 class="card-title">Balance del período</h3>
+      <p style="color: var(--text-secondary); margin-bottom: 1rem;">Cuotas a mes actual. Profesores a mes vencido (según recaudado período anterior).</p>
       <div class="stats-grid">
         <div class="stat-card">
           <div class="stat-value">${formatMoney(recaudado)}</div>
-          <div class="stat-label">Recaudado (cuotas + ventas + alquiler)</div>
+          <div class="stat-label">Recaudado este período (cuotas + ventas + alquiler)</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value">${formatMoney(recaudadoPeriodoAnterior)}</div>
+          <div class="stat-label">Recaudado período anterior (base para liquidación profesores)</div>
         </div>
         <div class="stat-card">
           <div class="stat-value">${formatMoney(totalPagado)}</div>
@@ -2710,30 +2723,11 @@ function renderFinanzas(container, opts = {}) {
         </div>
         <div class="stat-card">
           <div class="stat-value">${formatMoney(totalGastos)}</div>
-          <div class="stat-label">Otros gastos (alquiler, luz, etc.)</div>
+          <div class="stat-label">Otros gastos (${formatMoney(totalGastosPagados)} pagados, ${formatMoney(totalGastosPendientes)} pendientes)</div>
         </div>
         <div class="stat-card" style="${balance < 0 ? 'border-color: var(--semaforo-rojo);' : ''}">
           <div class="stat-value" style="${balance < 0 ? 'color: var(--semaforo-rojo);' : ''}">${formatMoney(balance)}</div>
-          <div class="stat-label">Balance (recaudado − pagados − gastos)</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="card">
-      <h3 class="card-title">Ingresos por quincena (cortes al 15)</h3>
-      <p style="color: var(--text-secondary); margin-bottom: 1rem;">Desglose de cuotas y ventas: 1ª quincena (15 al 28/29) y 2ª quincena (1 al 14).</p>
-      <div class="stats-grid">
-        <div class="stat-card">
-          <div class="stat-value">${formatMoney(ingresoQ1)}</div>
-          <div class="stat-label">1ª quincena (del 15 al fin de mes)</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value">${formatMoney(ingresoQ2)}</div>
-          <div class="stat-label">2ª quincena (del 1 al 14)</div>
-        </div>
-        <div class="stat-card">
-          <div class="stat-value">${formatMoney(ingresoQ1 + ingresoQ2)}</div>
-          <div class="stat-label">Total período</div>
+          <div class="stat-label">Balance (recaudado − profesores − gastos)</div>
         </div>
       </div>
     </div>
@@ -2763,7 +2757,8 @@ function renderFinanzas(container, opts = {}) {
     </div>
 
     <div class="card">
-      <h3 class="card-title">Liquidación profesores (15 al 15)</h3>
+      <h3 class="card-title">Liquidación profesores (a mes vencido)</h3>
+      <p style="color: var(--text-secondary); margin-bottom: 1rem;">Calculado sobre recaudado del período anterior (${periodoAnterior || '-'}). Podés agregar montos extra o ajustes manuales.</p>
       <div class="table-wrap">
         <table>
           <thead><tr><th>Profesor</th><th>Total período</th><th>Pagado</th><th>Pendiente</th></tr></thead>
@@ -2779,6 +2774,7 @@ function renderFinanzas(container, opts = {}) {
 
     <div class="card">
       <h3 class="card-title">Registrar pago a profesor</h3>
+      <p style="color: var(--text-secondary); margin-bottom: 1rem;">Para liquidación normal, extra, pendiente o ajuste manual.</p>
       <form id="form-pago-prof" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 1rem;">
         <div class="form-group">
           <label>Profesor</label>
@@ -2796,6 +2792,15 @@ function renderFinanzas(container, opts = {}) {
           <input type="number" id="pago-prof-monto" required />
         </div>
         <div class="form-group">
+          <label>Concepto</label>
+          <select id="pago-prof-concepto">
+            <option value="normal">Normal (liquidación)</option>
+            <option value="extra">Extra</option>
+            <option value="pendiente">Pendiente</option>
+            <option value="ajuste">Ajuste</option>
+          </select>
+        </div>
+        <div class="form-group">
           <label><input type="checkbox" id="pago-prof-adelantado" /> Adelantado</label>
         </div>
         <div class="form-group" style="align-self: flex-end;">
@@ -2806,22 +2811,24 @@ function renderFinanzas(container, opts = {}) {
 
     <div class="card">
       <h3 class="card-title">Pagos a profesores — tildar lo abonado / editar</h3>
-      <p style="color: var(--text-secondary); margin-bottom: 1rem;">Marcá los pagos que ya efectuaste. Clic en Editar para modificar fecha, profesor o monto.</p>
+      <p style="color: var(--text-secondary); margin-bottom: 1rem;">Marcá los pagos que ya efectuaste. Clic en Editar para modificar fecha, profesor, monto o concepto.</p>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Abonado</th><th>Fecha</th><th>Profesor</th><th>Monto</th><th>Adelantado</th><th></th></tr></thead>
+          <thead><tr><th>Abonado</th><th>Fecha</th><th>Profesor</th><th>Monto</th><th>Concepto</th><th>Adelantado</th><th></th></tr></thead>
           <tbody id="pagos-prof-tbody">
             ${pagosPeriodo.length ? pagosPeriodo.map((p, idx) => {
               const globalIdx = (appData.pagos_profesores || []).findIndex(x => x === p);
+              const conceptoLabel = { normal: 'Normal', extra: 'Extra', pendiente: 'Pendiente', ajuste: 'Ajuste' }[p.concepto] || (p.concepto || 'Normal');
               return `<tr data-pago-idx="${globalIdx}">
                 <td><input type="checkbox" class="pago-abonado-cb" data-idx="${globalIdx}" ${p.abonado !== false ? 'checked' : ''} title="Marcar si ya pagaste" /></td>
                 <td>${formatDate(p.fecha)}</td>
                 <td>${p.profesor || '-'}</td>
                 <td>${formatMoney(p.monto)}</td>
+                <td>${conceptoLabel}</td>
                 <td>${p.adelantado ? 'Sí' : '-'}</td>
                 <td><button type="button" class="btn btn-secondary btn-sm pago-edit-btn" data-idx="${globalIdx}">Editar</button></td>
               </tr>`;
-            }).join('') : '<tr><td colspan="6" style="color: var(--text-secondary);">No hay pagos registrados en este período</td></tr>'}
+            }).join('') : '<tr><td colspan="7" style="color: var(--text-secondary);">No hay pagos registrados en este período</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -2829,7 +2836,7 @@ function renderFinanzas(container, opts = {}) {
 
     <div class="card">
       <h3 class="card-title">Otros gastos del lugar</h3>
-      <p style="color: var(--text-secondary); margin-bottom: 1rem;">Alquiler, luz, gas, mantenimiento y otros gastos fijos del gimnasio.</p>
+      <p style="color: var(--text-secondary); margin-bottom: 1rem;">Alquiler, luz, gas, mantenimiento y otros. Agregá el gasto y marcá "Pagado" cuando lo abonés.</p>
       <form id="form-gasto" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
         <div class="form-group">
           <label>Categoría</label>
@@ -2862,11 +2869,13 @@ function renderFinanzas(container, opts = {}) {
       </form>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Fecha</th><th>Categoría</th><th>Concepto</th><th>Monto</th><th></th></tr></thead>
+          <thead><tr><th>Pagado</th><th>Fecha</th><th>Categoría</th><th>Concepto</th><th>Monto</th><th></th></tr></thead>
           <tbody>
             ${gastosPeriodo.length ? gastosPeriodo.map((g, idx) => {
               const globalIdx = (appData.gastos || []).findIndex(x => x === g);
-              return `<tr data-gasto-idx="${globalIdx}">
+              const pagado = g.pagado !== false;
+              return `<tr data-gasto-idx="${globalIdx}" style="${!pagado ? 'background: rgba(255,200,0,0.08);' : ''}">
+                <td><input type="checkbox" class="gasto-pagado-cb" data-idx="${globalIdx}" ${pagado ? 'checked' : ''} title="Marcar cuando abonaste" /></td>
                 <td>${formatDate(g.fecha)}</td>
                 <td>${g.categoria || '-'}</td>
                 <td>${g.concepto || '-'}</td>
@@ -2876,7 +2885,7 @@ function renderFinanzas(container, opts = {}) {
                   <button type="button" class="btn btn-secondary btn-sm gasto-del-btn" data-idx="${globalIdx}">Eliminar</button>
                 </td>
               </tr>`;
-            }).join('') : '<tr><td colspan="5" style="color: var(--text-secondary);">No hay gastos en este período</td></tr>'}
+            }).join('') : '<tr><td colspan="6" style="color: var(--text-secondary);">No hay gastos en este período</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -2974,6 +2983,7 @@ function renderFinanzas(container, opts = {}) {
       periodo,
       profesor,
       monto: parseInt(document.getElementById('pago-prof-monto').value, 10),
+      concepto: document.getElementById('pago-prof-concepto')?.value || 'normal',
       adelantado: document.getElementById('pago-prof-adelantado').checked,
       abonado: true
     });
@@ -3014,10 +3024,23 @@ function renderFinanzas(container, opts = {}) {
       periodo: getPeriodoDesdeFecha(fecha),
       categoria: document.getElementById('gasto-categoria').value,
       concepto: document.getElementById('gasto-concepto').value.trim() || document.getElementById('gasto-categoria').value,
-      monto: parseInt(document.getElementById('gasto-monto').value, 10) || 0
+      monto: parseInt(document.getElementById('gasto-monto').value, 10) || 0,
+      pagado: false
     });
     saveData(appData);
     renderPage(isAdmin ? 'admin' : 'finanzas');
+  });
+
+  container.querySelectorAll('.gasto-pagado-cb').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const idx = parseInt(cb.dataset.idx, 10);
+      const gasto = appData.gastos?.[idx];
+      if (gasto) {
+        gasto.pagado = cb.checked;
+        saveData(appData);
+        renderPage(isAdmin ? 'admin' : 'finanzas');
+      }
+    });
   });
 
   container.querySelectorAll('.gasto-edit-btn').forEach(btn => {
@@ -3073,6 +3096,15 @@ function abrirModalEditarPagoProfesor(pago, onGuardar) {
           <input type="number" id="pago-edit-monto" value="${pago.monto || 0}" required />
         </div>
         <div class="form-group">
+          <label>Concepto</label>
+          <select id="pago-edit-concepto">
+            <option value="normal" ${(pago.concepto || 'normal') === 'normal' ? 'selected' : ''}>Normal</option>
+            <option value="extra" ${pago.concepto === 'extra' ? 'selected' : ''}>Extra</option>
+            <option value="pendiente" ${pago.concepto === 'pendiente' ? 'selected' : ''}>Pendiente</option>
+            <option value="ajuste" ${pago.concepto === 'ajuste' ? 'selected' : ''}>Ajuste</option>
+          </select>
+        </div>
+        <div class="form-group">
           <label><input type="checkbox" id="pago-edit-adelantado" ${pago.adelantado ? 'checked' : ''} /> Adelantado</label>
         </div>
         <div class="form-group">
@@ -3092,6 +3124,7 @@ function abrirModalEditarPagoProfesor(pago, onGuardar) {
     pago.fecha = modal.querySelector('#pago-edit-fecha').value;
     pago.profesor = modal.querySelector('#pago-edit-profesor').value;
     pago.monto = parseInt(modal.querySelector('#pago-edit-monto').value, 10) || 0;
+    pago.concepto = modal.querySelector('#pago-edit-concepto')?.value || 'normal';
     pago.adelantado = modal.querySelector('#pago-edit-adelantado').checked;
     pago.abonado = modal.querySelector('#pago-edit-abonado').checked;
     pago.periodo = getPeriodoDesdeFecha(pago.fecha);
@@ -3130,6 +3163,9 @@ function abrirModalEditarGasto(gasto, onGuardar) {
           <label>Monto</label>
           <input type="number" id="gasto-edit-monto" value="${gasto.monto || 0}" required min="0" />
         </div>
+        <div class="form-group">
+          <label><input type="checkbox" id="gasto-edit-pagado" ${gasto.pagado !== false ? 'checked' : ''} /> Pagado</label>
+        </div>
         <div class="modal-footer" style="margin-top: 1rem;">
           <button type="submit" class="btn btn-primary">Guardar</button>
         </div>
@@ -3145,6 +3181,7 @@ function abrirModalEditarGasto(gasto, onGuardar) {
     gasto.categoria = modal.querySelector('#gasto-edit-categoria').value;
     gasto.concepto = modal.querySelector('#gasto-edit-concepto').value.trim() || gasto.categoria;
     gasto.monto = parseInt(modal.querySelector('#gasto-edit-monto').value, 10) || 0;
+    gasto.pagado = modal.querySelector('#gasto-edit-pagado').checked;
     gasto.periodo = getPeriodoDesdeFecha(gasto.fecha);
     modal.remove();
     if (onGuardar) onGuardar();
