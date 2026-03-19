@@ -2626,14 +2626,18 @@ function renderFinanzas(container, opts = {}) {
   const periodo = getPeriodoActual(appData);
   const diaFin = appData?.config?.periodo_dia_fin ?? 14;
   const { inicio, fin } = getRangoPeriodo15(periodo, diaFin);
+
+  // Período actual (15-03 al 14-04): lo que se junta desde el 15
   const cuotas = filtrarPorPeriodo15(appData.cuotas || [], periodo);
   const ventas = filtrarPorPeriodo15(appData.ventas || [], periodo);
 
-  // Pago profesores a mes vencido: liquidación se calcula con recaudado del período ANTERIOR
+  // Período anterior (15-02 al 14-03): recaudado, liquidación profes, balance
   const periodoAnterior = getPeriodoAnterior(periodo);
+  const { inicio: inicioAnt, fin: finAnt } = getRangoPeriodo15(periodoAnterior || '', diaFin);
   const cuotasPeriodoAnterior = filtrarPorPeriodo15(appData.cuotas || [], periodoAnterior);
   const ventasPeriodoAnterior = filtrarPorPeriodo15(appData.ventas || [], periodoAnterior);
   const cobrosAlqAnterior = filtrarPorPeriodo15(appData.cobros_alquiler || [], periodoAnterior);
+  const gastosPeriodoAnterior = filtrarPorPeriodo15(appData.gastos || [], periodoAnterior);
 
   const porMetodo = {};
   cuotas.forEach(c => {
@@ -2666,6 +2670,7 @@ function renderFinanzas(container, opts = {}) {
   const recaudadoPeriodoAnterior = cuotasPeriodoAnterior.reduce((s, c) => s + (c.monto || 0), 0)
     + ventasPeriodoAnterior.reduce((s, v) => s + (v.cantidad || 1) * (v.precio || 0), 0)
     + cobrosAlqAnterior.reduce((s, c) => s + (c.monto || 0), 0);
+  const totalGastosAnterior = gastosPeriodoAnterior.reduce((s, g) => s + (g.monto || 0), 0);
 
   const profesores = appData.profesores || [];
   const liquidacion = {};
@@ -2691,6 +2696,8 @@ function renderFinanzas(container, opts = {}) {
       if (cant > 0) liquidacion[p.nombre] = (liquidacion[p.nombre] || 0) + (p.valor || 0) * cant;
     }
   });
+  const totalLiquidacion = Object.values(liquidacion).reduce((s, v) => s + v, 0);
+  const balanceAnterior = recaudadoPeriodoAnterior - totalPagado - totalGastosAnterior;
 
   const pagosAdelantados = pagosProf.filter(p => p.adelantado);
 
@@ -2702,32 +2709,51 @@ function renderFinanzas(container, opts = {}) {
         <h2 class="card-title">Finanzas</h2>
         ${!isAdmin ? '<button type="button" class="btn btn-secondary" id="cerrar-finanzas">Cerrar sesión</button>' : ''}
       </div>
-      <p style="color: var(--text-secondary);">Período ${periodo}: ${inicio} al ${fin}</p>
+      <p style="color: var(--text-secondary);">El 15 de cada mes cambia el período. Actual: ${periodo} (${inicio} al ${fin})</p>
     </div>
 
     <div class="card">
-      <h3 class="card-title">Balance del período</h3>
-      <p style="color: var(--text-secondary); margin-bottom: 1rem;">Cuotas a mes actual. Profesores a mes vencido (según recaudado período anterior).</p>
+      <h3 class="card-title">Período anterior (${inicioAnt || '-'} al ${finAnt || '-'})</h3>
+      <p style="color: var(--text-secondary); margin-bottom: 1rem;">Cerrado. Recaudado, a pagar y balance.</p>
       <div class="stats-grid">
         <div class="stat-card">
-          <div class="stat-value">${formatMoney(recaudado)}</div>
-          <div class="stat-label">Recaudado este período (cuotas + ventas + alquiler)</div>
+          <div class="stat-value">${formatMoney(recaudadoPeriodoAnterior)}</div>
+          <div class="stat-label">Recaudado</div>
         </div>
         <div class="stat-card">
-          <div class="stat-value">${formatMoney(recaudadoPeriodoAnterior)}</div>
-          <div class="stat-label">Recaudado período anterior (base para liquidación profesores)</div>
+          <div class="stat-value">${formatMoney(totalLiquidacion)}</div>
+          <div class="stat-label">Hay que pagar (profesores)</div>
         </div>
         <div class="stat-card">
           <div class="stat-value">${formatMoney(totalPagado)}</div>
           <div class="stat-label">Pagado a profesores</div>
         </div>
         <div class="stat-card">
+          <div class="stat-value">${formatMoney(totalGastosAnterior)}</div>
+          <div class="stat-label">Gastos</div>
+        </div>
+        <div class="stat-card" style="${balanceAnterior < 0 ? 'border-color: var(--semaforo-rojo);' : ''}">
+          <div class="stat-value" style="${balanceAnterior < 0 ? 'color: var(--semaforo-rojo);' : ''}">${formatMoney(balanceAnterior)}</div>
+          <div class="stat-label">Balance</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 class="card-title">Período actual (${inicio} al ${fin})</h3>
+      <p style="color: var(--text-secondary); margin-bottom: 1rem;">Lo nuevo que se junta desde el 15. Socios, renovaciones, ventas.</p>
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-value">${formatMoney(recaudado)}</div>
+          <div class="stat-label">Recaudado este período</div>
+        </div>
+        <div class="stat-card">
           <div class="stat-value">${formatMoney(totalGastos)}</div>
-          <div class="stat-label">Otros gastos (${formatMoney(totalGastosPagados)} pagados, ${formatMoney(totalGastosPendientes)} pendientes)</div>
+          <div class="stat-label">Gastos (${formatMoney(totalGastosPagados)} pagados, ${formatMoney(totalGastosPendientes)} pendientes)</div>
         </div>
         <div class="stat-card" style="${balance < 0 ? 'border-color: var(--semaforo-rojo);' : ''}">
           <div class="stat-value" style="${balance < 0 ? 'color: var(--semaforo-rojo);' : ''}">${formatMoney(balance)}</div>
-          <div class="stat-label">Balance (recaudado − profesores − gastos)</div>
+          <div class="stat-label">Balance actual</div>
         </div>
       </div>
     </div>

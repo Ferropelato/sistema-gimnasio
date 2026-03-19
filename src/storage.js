@@ -4,6 +4,7 @@
  * Fallback a localStorage si Firebase falla
  */
 import { db } from './firebase.js';
+import { getPeriodo15Actual } from './utils.js';
 import { ref, get, set, onValue } from 'firebase/database';
 
 const FIREBASE_PATH = 'gym/data';
@@ -14,7 +15,7 @@ export async function loadData() {
     const dataRef = ref(db, FIREBASE_PATH);
     const snapshot = await get(dataRef);
     if (snapshot.exists()) {
-      const data = snapshot.val();
+      let data = snapshot.val();
       if (!data.profesores) data.profesores = [];
       if (!data.rutinas) data.rutinas = [];
       if (!data.horario) data.horario = [];
@@ -22,6 +23,14 @@ export async function loadData() {
       if (!data.actividades_alquiler) data.actividades_alquiler = [];
       if (!data.cobros_alquiler) data.cobros_alquiler = [];
       if (!data.gastos) data.gastos = [];
+      // El 15 de cada mes: avanzar período automáticamente
+      const periodoReal = getPeriodo15Actual();
+      const cfgPeriodo = data.config?.periodo_actual || '';
+      if (periodoReal && cfgPeriodo && periodoReal > cfgPeriodo) {
+        data.config = data.config || {};
+        data.config.periodo_actual = periodoReal;
+        await saveData(data);
+      }
       return data;
     }
   } catch (e) {
@@ -29,7 +38,7 @@ export async function loadData() {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
       try {
-        const data = JSON.parse(stored);
+        let data = JSON.parse(stored);
         if (!data.profesores) data.profesores = [];
         if (!data.rutinas) data.rutinas = [];
         if (!data.horario) data.horario = [];
@@ -37,6 +46,13 @@ export async function loadData() {
         if (!data.actividades_alquiler) data.actividades_alquiler = [];
         if (!data.cobros_alquiler) data.cobros_alquiler = [];
         if (!data.gastos) data.gastos = [];
+        const periodoReal = getPeriodo15Actual();
+        const cfgPeriodo = data.config?.periodo_actual || '';
+        if (periodoReal && cfgPeriodo && periodoReal > cfgPeriodo) {
+          data.config = data.config || {};
+          data.config.periodo_actual = periodoReal;
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        }
         return data;
       } catch (err) {
         console.warn('Error parsing localStorage', err);
@@ -98,7 +114,7 @@ function getEmptyData() {
     cobros_alquiler: [],
     horario: [],
     config: {
-      periodo_actual: new Date().toISOString().slice(0, 7),
+      periodo_actual: getPeriodo15Actual(),
       periodo_dia_fin: 16,
       metodos_pago: ['Efectivo', 'Transferencia', 'QR', 'Débito', 'Crédito', 'MP', 'Caja'],
       tarifa_luz: 1,
@@ -108,8 +124,10 @@ function getEmptyData() {
   };
 }
 
+/** Período actual: usa config si está definido, sino el período 15-14 según hoy */
 export function getPeriodoActual(data) {
-  return data?.config?.periodo_actual || new Date().toISOString().slice(0, 7);
+  const cfg = data?.config?.periodo_actual;
+  return (cfg && cfg.length >= 7) ? cfg : getPeriodo15Actual();
 }
 
 /** Suscribirse a cambios en tiempo real desde Firebase */
