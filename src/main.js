@@ -737,9 +737,19 @@ function renderCuotas(container) {
           </select>
         </div>
         <div class="form-group">
-          <label>Monto</label>
-          <input type="number" id="cuota-monto" required placeholder="Ej: 40000" />
+          <label>Monto (tarifa / sin descuento)</label>
+          <input type="number" id="cuota-monto" required placeholder="Ej: 40000" min="0" />
         </div>
+        <div class="form-group">
+          <label>Descuento (%)</label>
+          <input type="number" id="cuota-descuento" placeholder="0" min="0" max="100" step="0.01" value="" />
+          <small style="color: var(--text-secondary); display: block; margin-top: 0.25rem;">Opcional. Se aplica sobre el monto base.</small>
+        </div>
+        <div class="form-group">
+          <label>Motivo del descuento</label>
+          <input type="text" id="cuota-descuento-motivo" placeholder="Ej: Promo, socio estudiante, familiar..." />
+        </div>
+        <p id="cuota-monto-final-preview" style="color: var(--text-secondary); font-size: 0.95rem; margin: -0.5rem 0 0.5rem 0;"></p>
         <div class="form-group">
           <label>Método de pago</label>
           <select id="cuota-metodo">
@@ -811,7 +821,8 @@ function renderCuotas(container) {
               <th>Fecha</th>
               <th>Socio</th>
               <th>Actividad</th>
-              <th>Monto</th>
+              <th>Monto cobrado</th>
+              <th>Desc.</th>
               <th>Días rest.</th>
               <th>Pago prof.</th>
               <th>Método</th>
@@ -823,12 +834,15 @@ function renderCuotas(container) {
             ${cuotas.slice(-50).reverse().map(c => {
               const rest = diasRestantes(c.fecha);
               const idx = appData.cuotas.findIndex(x => x === c);
+              const pct = c.descuento_porcentaje != null && c.descuento_porcentaje > 0 ? `${c.descuento_porcentaje}%` : '—';
+              const motDesc = (c.descuento_motivo || '').trim();
               return `
               <tr>
                 <td>${formatDate(c.fecha)}</td>
                 <td>${c.nombre}</td>
                 <td>${c.actividad || '-'}</td>
-                <td>${formatMoney(c.monto)}</td>
+                <td>${formatMoney(c.monto)}${c.monto_tarifa != null && c.monto_tarifa > (c.monto || 0) ? `<br><small style="color:var(--text-secondary)">Tarifa ${formatMoney(c.monto_tarifa)}</small>` : ''}</td>
+                <td title="${motDesc ? motDesc.replace(/"/g, '&quot;') : ''}">${pct}${motDesc ? `<br><small style="color:var(--text-secondary)">${motDesc.length > 24 ? motDesc.slice(0, 22) + '…' : motDesc}</small>` : ''}</td>
                 <td>${rest !== null ? rest + 'd' : '-'}</td>
                 <td>${c.pago_profesor ? formatMoney(c.pago_profesor) + ' (' + (c.profesor_nombre || '') + ')' : '-'}</td>
                 <td>${c.metodo || '-'}</td>
@@ -854,12 +868,15 @@ function renderCuotas(container) {
     if (tbody) tbody.innerHTML = list.map(c => {
       const rest = diasRestantes(c.fecha);
       const idx = appData.cuotas.findIndex(x => x === c);
+      const pct = c.descuento_porcentaje != null && c.descuento_porcentaje > 0 ? `${c.descuento_porcentaje}%` : '—';
+      const motDesc = (c.descuento_motivo || '').trim();
       return `
         <tr>
           <td>${formatDate(c.fecha)}</td>
           <td>${c.nombre}</td>
           <td>${c.actividad || '-'}</td>
-          <td>${formatMoney(c.monto)}</td>
+          <td>${formatMoney(c.monto)}${c.monto_tarifa != null && c.monto_tarifa > (c.monto || 0) ? `<br><small style="color:var(--text-secondary)">Tarifa ${formatMoney(c.monto_tarifa)}</small>` : ''}</td>
+          <td title="${motDesc ? motDesc.replace(/"/g, '&quot;') : ''}">${pct}${motDesc ? `<br><small style="color:var(--text-secondary)">${motDesc.length > 24 ? motDesc.slice(0, 22) + '…' : motDesc}</small>` : ''}</td>
           <td>${rest !== null ? rest + 'd' : '-'}</td>
           <td>${c.pago_profesor ? formatMoney(c.pago_profesor) + ' (' + (c.profesor_nombre || '') + ')' : '-'}</td>
           <td>${c.metodo || '-'}</td>
@@ -883,12 +900,41 @@ function renderCuotas(container) {
     renderPage('cuotas');
   });
 
+  function actualizarPreviewCuotaMonto() {
+    const el = document.getElementById('cuota-monto-final-preview');
+    if (!el) return;
+    const base = parseFloat(document.getElementById('cuota-monto')?.value || '0') || 0;
+    const pct = parseFloat(document.getElementById('cuota-descuento')?.value || '0') || 0;
+    if (pct > 0 && base > 0) {
+      const final = Math.round(base * (100 - Math.min(100, Math.max(0, pct))) / 100);
+      el.textContent = `Cobro final: ${formatMoney(final)} (${pct}% de descuento)`;
+    } else {
+      el.textContent = base > 0 ? `Cobro final: ${formatMoney(base)}` : '';
+    }
+  }
+  document.getElementById('cuota-monto')?.addEventListener('input', actualizarPreviewCuotaMonto);
+  document.getElementById('cuota-descuento')?.addEventListener('input', actualizarPreviewCuotaMonto);
+
   document.getElementById('form-cuota').addEventListener('submit', (e) => {
     e.preventDefault();
     const socioId = document.getElementById('cuota-socio').value;
     const socio = socios.find(s => s.id === socioId);
     if (!socio) return;
-    const monto = parseInt(document.getElementById('cuota-monto').value, 10);
+    const montoTarifa = parseInt(document.getElementById('cuota-monto').value, 10);
+    if (isNaN(montoTarifa) || montoTarifa < 0) {
+      mostrarToast('Ingresá un monto válido');
+      return;
+    }
+    const descPctRaw = parseFloat(document.getElementById('cuota-descuento').value || '0');
+    const descPct = descPctRaw > 0 ? Math.min(100, Math.max(0, descPctRaw)) : 0;
+    const descMotivo = (document.getElementById('cuota-descuento-motivo').value || '').trim();
+    if (descPct > 0 && !descMotivo) {
+      mostrarToast('Indicá el motivo del descuento');
+      return;
+    }
+    const monto = descPct > 0
+      ? Math.round(montoTarifa * (100 - descPct) / 100)
+      : montoTarifa;
     const metodo = document.getElementById('cuota-metodo').value;
     const tipo = document.getElementById('cuota-tipo').value;
     const obs = document.getElementById('cuota-obs').value;
@@ -910,7 +956,7 @@ function renderCuotas(container) {
         profesorNombre = (profesorNombre ? profesorNombre + ', ' : '') + prof.nombre;
       }
     });
-    appData.cuotas.push({
+    const cuotaReg = {
       fecha: hoy,
       periodo: periodoReal,
       nombre: socio.nombre,
@@ -922,7 +968,13 @@ function renderCuotas(container) {
       observaciones: obs,
       pago_profesor: pagoProfTotal,
       profesor_nombre: profesorNombre
-    });
+    };
+    if (descPct > 0) {
+      cuotaReg.monto_tarifa = montoTarifa;
+      cuotaReg.descuento_porcentaje = descPct;
+      cuotaReg.descuento_motivo = descMotivo;
+    }
+    appData.cuotas.push(cuotaReg);
     socio.ultimo_pago = hoy;
     socio.ultimo_periodo = periodoReal;
     socio.monto = monto;
@@ -1048,7 +1100,7 @@ function abrirModalEditarFechaCuota(cuota) {
         <button type="button" class="btn-cerrar" aria-label="Cerrar">&times;</button>
       </div>
       <div class="modal-body">
-        <p style="color: var(--text-secondary); margin-bottom: 1rem;">${cuota.nombre} - ${formatMoney(cuota.monto)}</p>
+        <p style="color: var(--text-secondary); margin-bottom: 1rem;">${cuota.nombre} - ${formatMoney(cuota.monto)}${cuota.descuento_porcentaje ? ` (${cuota.descuento_porcentaje}% desc.: ${(cuota.descuento_motivo || '').replace(/</g, '')})` : ''}</p>
         <div class="form-group">
           <label>Fecha del pago</label>
           <input type="date" id="cuota-editar-fecha" value="${cuota.fecha || ''}" />
