@@ -640,6 +640,42 @@ input:focus, select:focus, textarea:focus {
   color: var(--semaforo-rojo);
 }
 
+/* Barra de sincronización Firebase (todas las PCs ven la misma nube) */
+.sync-bar {
+  padding: 0.45rem 1rem;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  text-align: center;
+  border-bottom: 1px solid var(--border, rgba(255, 255, 255, 0.08));
+}
+.sync-bar strong {
+  font-weight: 600;
+}
+.sync-bar .sync-bar-actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: center;
+  margin-top: 0.35rem;
+}
+.sync-bar--loading {
+  background: rgba(100, 116, 139, 0.2);
+  color: var(--text-secondary, #94a3b8);
+}
+.sync-bar--ok {
+  background: rgba(34, 197, 94, 0.12);
+  color: #86efac;
+}
+.sync-bar--warn {
+  background: rgba(234, 179, 8, 0.15);
+  color: #fde047;
+}
+.sync-bar--err {
+  background: rgba(239, 68, 68, 0.14);
+  color: #fca5a5;
+}
+
 @media (max-width: 768px) {
   .header {
     flex-direction: column;

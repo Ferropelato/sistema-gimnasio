@@ -44,14 +44,19 @@ c:\Users\Fernando\Desktop\curso desarrollador\gimnasio
 ## Datos (Firebase Realtime Database)
 
 - Los datos se guardan en **Firebase** y se sincronizan entre todas las PCs/dispositivos
-- **Respaldo local**: siempre se guarda primero en localStorage; si la app se cierra o hay fallos de red, los datos se recuperan al volver a abrir
+- **Barra bajo el menú (verde / amarillo / rojo):** indica si lo que hacés **llegó a la nube**. En la **PC del gimnasio**, antes de cerrar, comprobá **Nube OK** en verde; si está en rojo o amarillo, tocá **Subir / reconectar** o **💾 Guardar** hasta que pase a verde (y revisá WiFi o reglas de Firebase).
+- Al guardar, la app **reintenta varias veces** si la red falla. Si volvés el WiFi, al recuperar conexión intenta subir solo.
+- Al abrir la app, si Firebase responde, **prevalece lo que está en la nube** (así otra PC no “pisa” con un caché viejo del navegador). Si en una PC cargás socios y en otra no aparecen, revisá la consola del navegador (F12): suele ser fallo de red o reglas de Firebase al guardar.
+- **Respaldo local**: siempre se guarda primero en localStorage; si la app se cierra o hay fallos de red, los datos se recuperan al volver a abrir en **ese mismo navegador**
 - **Autoguardado por inactividad**: tras **5 minutos** sin escribir, hacer clic, desplazarse ni tocar la pantalla, se hace un respaldo local (no interrumpe lo que estés escribiendo)
 - **Exportar**: descargá un backup JSON (botón 📤) para guardarlo en tu PC
 - **Importar**: restauramos desde un archivo JSON (botón 📥)
 
-### Si se pierden datos
-- Al abrir la app, se usa la versión más reciente entre Firebase y localStorage
-- Si tenés un backup exportado, usá Importar (📥) para restaurarlo
+### Si se pierden datos o al actualizar la app
+- **Subir el código** (push a GitHub / deploy en Vercel) **no borra** los datos: viven en **Firebase**, no en el repositorio.
+- Al abrir la app, si Firebase responde, se muestra lo que está en la **nube**. Si en una sesión cargaste socios o ventas pero **no se llegó a sincronizar** (fallo de red o reglas), eso puede haber quedado solo en **localStorage de ese navegador**. En ese caso, **recargar o actualizar la app puede hacer que desaparezca** esa copia local al reemplazarla por la nube.
+- **Antes de recargar** si cargaste datos hoy y no estás seguro de que se hayan subido: usá **Exportar** (📤), guardá el JSON, y revisá en otra pestaña o PC si esos datos ya están en Firebase.
+- Si tenés un backup exportado, usá **Importar** (📥) para fusionar o restaurar (reemplaza todo el estado con el archivo).
 
 ### Reglas de Firebase Realtime Database
 

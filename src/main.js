@@ -3,7 +3,7 @@
  * Punto de entrada principal
  */
 
-import { loadData, saveData, saveToLocalSync, getPeriodoActual, subscribeToDataUpdates } from './storage.js';
+import { loadData, saveData, saveToLocalSync, getPeriodoActual, subscribeToDataUpdates, subscribeSyncStatus, pingFirebaseRead } from './storage.js';
 import * as fingerprint from './fingerprint.js';
 import { calcularSemaforo, formatMoney, formatDate, getRangoPeriodo15, fechaEnPeriodo15, diasDesdePago, diasRestantes, getPeriodoDesdeFecha, getPeriodoAnterior, calcularEdad, listarCumpleanosHoyYManana } from './utils.js';
 import { isAdminAutenticado, setAdminAutenticado, verificarClave, filtrarPorPeriodo15, getPeriodosDisponibles } from './finanzas.js';
@@ -62,10 +62,32 @@ function actualizarFechaHeader() {
 }
 
 async function init() {
+  subscribeSyncStatus(updateSyncBar);
   appData = await loadData();
   actualizarFechaHeader();
   setInterval(actualizarFechaHeader, 60000);
   renderPage('dashboard');
+
+  document.getElementById('sync-bar')?.addEventListener('click', async e => {
+    const btn = e.target.closest('.sync-retry-btn');
+    if (!btn || !appData) return;
+    btn.disabled = true;
+    await pingFirebaseRead();
+    const ok = await saveData(appData);
+    btn.disabled = false;
+    mostrarToast(
+      ok
+        ? 'Listo: datos en la nube. Las demás PCs deberían ver lo mismo al abrir o al instante si ya tenían la app abierta.'
+        : 'Sigue sin subir. Revisá Internet, firewall o reglas de Firebase (F12 → consola).'
+    );
+  });
+
+  window.addEventListener('online', () => {
+    if (!appData) return;
+    saveData(appData).then(ok => {
+      if (ok) mostrarToast('Conexión restaurada: datos subidos a la nube.');
+    });
+  });
 
   // Actualización en tiempo real desde Firebase
   subscribeToDataUpdates((data) => {
@@ -87,11 +109,12 @@ async function init() {
   });
 
   // Botón guardar manual
-  document.getElementById('btn-guardar')?.addEventListener('click', () => {
-    if (appData) {
-      saveData(appData);
-      mostrarToast('Datos guardados correctamente');
-    }
+  document.getElementById('btn-guardar')?.addEventListener('click', async () => {
+    if (!appData) return;
+    const ok = await saveData(appData);
+    mostrarToast(
+      ok ? 'Guardado en la nube: todas las PCs comparten estos datos.' : 'Solo se guardó en este navegador. Revisá la barra de sincronización o la conexión.'
+    );
   });
 
   // Exportar backup (descarga JSON)
@@ -119,8 +142,10 @@ async function init() {
       const data = JSON.parse(text);
       if (!data.socios || !Array.isArray(data.socios)) throw new Error('Archivo inválido');
       appData = data;
-      saveData(appData);
-      mostrarToast('Datos restaurados correctamente');
+      const okImp = await saveData(appData);
+      mostrarToast(
+        okImp ? 'Datos restaurados y subidos a la nube.' : 'Importado en este equipo; no se pudo subir a Firebase — usá “Subir / reconectar”.'
+      );
       renderPage('dashboard');
     } catch (err) {
       mostrarToast('Error: archivo no válido');
@@ -148,6 +173,9 @@ async function init() {
     } else {
       if (intervaloIdle) clearInterval(intervaloIdle);
       intervaloIdle = null;
+      if (appData) {
+        pingFirebaseRead().then(() => saveData(appData));
+      }
     }
   });
 
@@ -176,6 +204,42 @@ function mostrarToast(mensaje) {
     toast.classList.remove('show');
     setTimeout(() => toast.remove(), 300);
   }, 2500);
+}
+
+/** Barra bajo el encabezado: estado de Firebase para la PC del gimnasio y el resto */
+function updateSyncBar(state) {
+  const el = document.getElementById('sync-bar');
+  if (!el) return;
+  const { lastCloudReadOk, lastCloudWriteOk, pendingCloudSync, lastCloudWriteAt } = state;
+  const hora =
+    lastCloudWriteAt > 0
+      ? new Date(lastCloudWriteAt).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })
+      : '—';
+
+  const acciones =
+    '<div class="sync-bar-actions">' +
+    '<button type="button" class="btn btn-secondary btn-sm sync-retry-btn">Subir / reconectar ahora</button>' +
+    '</div>';
+
+  if (!lastCloudReadOk) {
+    el.className = 'sync-bar sync-bar--err';
+    el.innerHTML =
+      '<strong>No hay conexión con Firebase.</strong> Estás viendo datos guardados solo en este navegador: <strong>otras PCs no se actualizan</strong> hasta reconectar. ' +
+      acciones;
+    return;
+  }
+  if (pendingCloudSync || !lastCloudWriteOk) {
+    el.className = 'sync-bar sync-bar--warn';
+    el.innerHTML =
+      '<strong>Cambios sin confirmar en la nube.</strong> Lo último puede no verse en otra PC. Revisá WiFi o reglas de Firebase. ' +
+      acciones;
+    return;
+  }
+  el.className = 'sync-bar sync-bar--ok';
+  el.innerHTML =
+    '<strong>Nube OK</strong> — Misma base de datos en todas las PCs. Último envío al servidor: <strong>' +
+    hora +
+    '</strong>. Antes de irte del gimnasio, comprobá que siga en verde o tocá 💾 Guardar.';
 }
 
 function renderPage(page) {
@@ -889,7 +953,7 @@ function renderCuotas(container) {
               <th>Pago prof.</th>
               <th>Método</th>
               <th>Tipo</th>
-              <th></th>
+              <th style="white-space:nowrap">Acciones</th>
             </tr>
           </thead>
           <tbody id="cuota-tbody">
@@ -909,7 +973,10 @@ function renderCuotas(container) {
                 <td>${c.pago_profesor ? formatMoney(c.pago_profesor) + ' (' + (c.profesor_nombre || '') + ')' : '-'}</td>
                 <td>${c.metodo || '-'}</td>
                 <td>${c.tipo || '-'}</td>
-                <td><button type="button" class="btn btn-secondary btn-sm" data-editar-cuota="${idx}" title="Editar fecha">✏️</button></td>
+                <td style="white-space:nowrap">
+                  <button type="button" class="btn btn-secondary btn-sm" data-editar-cuota="${idx}" title="Editar fecha">✏️</button>
+                  <button type="button" class="btn btn-secondary btn-sm" data-eliminar-cuota="${idx}" title="Eliminar este registro de pago" style="margin-left:4px;color:var(--semaforo-rojo)">🗑️</button>
+                </td>
               </tr>
             `}).join('')}
           </tbody>
@@ -943,14 +1010,38 @@ function renderCuotas(container) {
           <td>${c.pago_profesor ? formatMoney(c.pago_profesor) + ' (' + (c.profesor_nombre || '') + ')' : '-'}</td>
           <td>${c.metodo || '-'}</td>
           <td>${c.tipo || '-'}</td>
-          <td><button type="button" class="btn btn-secondary btn-sm" data-editar-cuota="${idx}" title="Editar fecha">✏️</button></td>
+          <td style="white-space:nowrap">
+            <button type="button" class="btn btn-secondary btn-sm" data-editar-cuota="${idx}" title="Editar fecha">✏️</button>
+            <button type="button" class="btn btn-secondary btn-sm" data-eliminar-cuota="${idx}" title="Eliminar este registro de pago" style="margin-left:4px;color:var(--semaforo-rojo)">🗑️</button>
+          </td>
         </tr>
       `;
     }).join('');
   }
 
-  container.querySelectorAll('[data-editar-cuota]').forEach(btn => {
-    btn.addEventListener('click', () => abrirModalEditarFechaCuota(appData.cuotas[parseInt(btn.dataset.editarCuota, 10)]));
+  document.getElementById('cuota-tbody')?.addEventListener('click', async (e) => {
+    const editBtn = e.target.closest('[data-editar-cuota]');
+    if (editBtn) {
+      const idx = parseInt(editBtn.dataset.editarCuota, 10);
+      if (idx >= 0 && appData.cuotas[idx]) abrirModalEditarFechaCuota(appData.cuotas[idx]);
+      return;
+    }
+    const delBtn = e.target.closest('[data-eliminar-cuota]');
+    if (delBtn) {
+      const idx = parseInt(delBtn.dataset.eliminarCuota, 10);
+      const cuota = idx >= 0 ? appData.cuotas[idx] : null;
+      if (!cuota) return;
+      const msg = `¿Eliminar este pago?\n${cuota.nombre} — ${formatMoney(cuota.monto)} — ${formatDate(cuota.fecha)}`;
+      if (!confirm(msg)) return;
+      appData.cuotas.splice(idx, 1);
+      const okCloud = await saveData(appData);
+      if (!okCloud) {
+        mostrarToast('Eliminado en este equipo. No se pudo sincronizar con Firebase.');
+      } else {
+        mostrarToast('Pago eliminado');
+      }
+      renderPage('cuotas');
+    }
   });
 
   document.getElementById('cuota-filtro-actividad')?.addEventListener('change', filtrarCuotasPorActividad);
@@ -977,8 +1068,11 @@ function renderCuotas(container) {
   document.getElementById('cuota-monto')?.addEventListener('input', actualizarPreviewCuotaMonto);
   document.getElementById('cuota-descuento')?.addEventListener('input', actualizarPreviewCuotaMonto);
 
-  document.getElementById('form-cuota').addEventListener('submit', (e) => {
+  const formCuota = document.getElementById('form-cuota');
+  const btnCuotaSubmit = formCuota?.querySelector('button[type="submit"]');
+  formCuota?.addEventListener('submit', async (e) => {
     e.preventDefault();
+    if (btnCuotaSubmit?.disabled) return;
     const socioId = document.getElementById('cuota-socio').value;
     const socio = socios.find(s => s.id === socioId);
     if (!socio) return;
@@ -1019,6 +1113,7 @@ function renderCuotas(container) {
       }
     });
     const cuotaReg = {
+      id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `c${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       fecha: hoy,
       periodo: periodoReal,
       nombre: socio.nombre,
@@ -1036,12 +1131,18 @@ function renderCuotas(container) {
       cuotaReg.descuento_porcentaje = descPct;
       cuotaReg.descuento_motivo = descMotivo;
     }
+    if (btnCuotaSubmit) btnCuotaSubmit.disabled = true;
     appData.cuotas.push(cuotaReg);
     socio.ultimo_pago = hoy;
     socio.ultimo_periodo = periodoReal;
     socio.monto = monto;
     socio.metodo_pago = metodo;
-    saveData(appData);
+    const okCloud = await saveData(appData);
+    if (!okCloud) {
+      mostrarToast('Pago guardado en este equipo. No se pudo subir a Firebase: revisá red o reglas; otras PCs no lo verán hasta que sincronice.');
+    } else {
+      mostrarToast('Pago registrado');
+    }
     renderPage('cuotas');
   });
 

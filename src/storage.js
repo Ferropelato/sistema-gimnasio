@@ -1,6 +1,6 @@
 /**
  * Almacenamiento - Center Gym
- * Usa Firebase Realtime Database (sincronizado entre PCs)
+ * Firebase Realtime Database (sincronizado entre PCs)
  * Fallback a localStorage si Firebase falla
  */
 import { db } from './firebase.js';
@@ -10,6 +10,65 @@ import { ref, get, set, onValue } from 'firebase/database';
 const FIREBASE_PATH = 'gym/data';
 const STORAGE_KEY = 'center-gym-data';
 const STORAGE_TIMESTAMP_KEY = 'center-gym-data-saved-at';
+
+const SAVE_RETRIES = 4;
+const SAVE_RETRY_BASE_MS = 450;
+
+/** @type {Array<(s: SyncState) => void>} */
+let syncListeners = [];
+
+/** @typedef {{ lastCloudReadOk: boolean, lastCloudWriteOk: boolean, lastCloudWriteAt: number, pendingCloudSync: boolean, lastRealtimeAt: number, realtimeListening: boolean }} SyncState */
+
+let lastCloudReadOk = true;
+let lastCloudWriteOk = true;
+let lastCloudWriteAt = 0;
+let pendingCloudSync = false;
+let lastRealtimeAt = 0;
+let realtimeListening = false;
+
+function emitSync() {
+  const state = getSyncState();
+  syncListeners.forEach(fn => {
+    try {
+      fn(state);
+    } catch (e) {
+      console.warn('sync listener', e);
+    }
+  });
+}
+
+/**
+ * Recibe actualizaciones cuando cambia el estado de sincronización con Firebase.
+ * @param {(s: SyncState) => void} fn
+ */
+export function subscribeSyncStatus(fn) {
+  syncListeners.push(fn);
+}
+
+export function getSyncState() {
+  return {
+    lastCloudReadOk,
+    lastCloudWriteOk,
+    lastCloudWriteAt,
+    pendingCloudSync,
+    lastRealtimeAt,
+    realtimeListening
+  };
+}
+
+/** Comprueba si la nube responde (útil al volver a la pestaña) */
+export async function pingFirebaseRead() {
+  try {
+    await get(ref(db, FIREBASE_PATH));
+    lastCloudReadOk = true;
+    emitSync();
+    return true;
+  } catch (e) {
+    lastCloudReadOk = false;
+    emitSync();
+    return false;
+  }
+}
 
 function normalizeData(data) {
   if (!data) return null;
@@ -26,19 +85,21 @@ function normalizeData(data) {
 export async function loadData() {
   let dataFirebase = null;
   let dataLocal = null;
+  let firebaseReadOk = false;
 
   try {
     const dataRef = ref(db, FIREBASE_PATH);
     const snapshot = await get(dataRef);
+    firebaseReadOk = true;
     if (snapshot.exists()) {
       dataFirebase = normalizeData(snapshot.val());
     }
   } catch (e) {
     console.warn('Firebase no disponible, usando localStorage:', e.message);
+    lastCloudReadOk = false;
   }
 
   const stored = localStorage.getItem(STORAGE_KEY);
-  const localTs = localStorage.getItem(STORAGE_TIMESTAMP_KEY);
   if (stored) {
     try {
       dataLocal = normalizeData(JSON.parse(stored));
@@ -47,13 +108,31 @@ export async function loadData() {
     }
   }
 
-  // Usar los datos más recientes para evitar pérdida
-  const fbTs = dataFirebase?._lastSavedAt || 0;
-  const locTs = localTs ? parseInt(localTs, 10) : 0;
-  let data = dataLocal && locTs > fbTs ? dataLocal : (dataFirebase || dataLocal);
+  if (firebaseReadOk) {
+    lastCloudReadOk = true;
+  }
+
+  let data = null;
+  if (dataFirebase) {
+    data = dataFirebase;
+    if (data._lastSavedAt) {
+      lastCloudWriteAt = data._lastSavedAt;
+      lastCloudWriteOk = true;
+      pendingCloudSync = false;
+    }
+    const ts = data._lastSavedAt || Date.now();
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    localStorage.setItem(STORAGE_TIMESTAMP_KEY, String(ts));
+  } else if (firebaseReadOk) {
+    if (dataLocal) {
+      data = dataLocal;
+      await saveData(data);
+    }
+  } else if (dataLocal) {
+    data = dataLocal;
+  }
 
   if (data) {
-    // Período: avanzar si corresponde
     const periodoReal = getPeriodo15Actual();
     const cfgPeriodo = data.config?.periodo_actual || '';
     if (periodoReal && cfgPeriodo && periodoReal > cfgPeriodo) {
@@ -61,14 +140,10 @@ export async function loadData() {
       data.config.periodo_actual = periodoReal;
       await saveData(data);
     }
-    // Si usamos datos locales más nuevos, subirlos a Firebase
-    if (dataLocal && locTs > fbTs) {
-      await saveData(data);
-    }
+    emitSync();
     return data;
   }
 
-  // Cargar datos iniciales desde JSON
   try {
     const res = await fetch('/data/datos-iniciales.json');
     const data = await res.json();
@@ -85,10 +160,13 @@ export async function loadData() {
         }));
     }
     await saveData(data);
+    emitSync();
     return data;
   } catch (e) {
     console.error('Error loading initial data', e);
-    return getEmptyData();
+    const empty = getEmptyData();
+    emitSync();
+    return empty;
   }
 }
 
@@ -101,20 +179,39 @@ export function saveToLocalSync(data) {
   localStorage.setItem(STORAGE_TIMESTAMP_KEY, String(ts));
 }
 
+/**
+ * Guarda en localStorage y sube a Firebase con reintentos (red inestable en el gimnasio).
+ * @returns {Promise<boolean>} true si la nube recibió los datos
+ */
 export async function saveData(data) {
   const ts = Date.now();
   data._lastSavedAt = ts;
-  // Guardar en localStorage PRIMERO (sincrónico) para no perder datos si falla o se cierra
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   localStorage.setItem(STORAGE_TIMESTAMP_KEY, String(ts));
-  try {
-    const dataRef = ref(db, FIREBASE_PATH);
-    await set(dataRef, data);
-    return true;
-  } catch (e) {
-    console.warn('Firebase save failed, datos guardados en localStorage:', e.message);
-    return false;
+
+  const dataRef = ref(db, FIREBASE_PATH);
+  let lastErr = null;
+  for (let attempt = 0; attempt < SAVE_RETRIES; attempt++) {
+    try {
+      await set(dataRef, data);
+      lastCloudWriteOk = true;
+      lastCloudWriteAt = Date.now();
+      pendingCloudSync = false;
+      emitSync();
+      return true;
+    } catch (e) {
+      lastErr = e;
+      console.warn(`Firebase save intento ${attempt + 1}/${SAVE_RETRIES}:`, e.message);
+      if (attempt < SAVE_RETRIES - 1) {
+        await new Promise(r => setTimeout(r, SAVE_RETRY_BASE_MS * (attempt + 1)));
+      }
+    }
   }
+  lastCloudWriteOk = false;
+  pendingCloudSync = true;
+  emitSync();
+  console.warn('Firebase save failed tras reintentos, datos guardados en localStorage:', lastErr?.message);
+  return false;
 }
 
 function getEmptyData() {
@@ -149,21 +246,37 @@ export function getPeriodoActual(data) {
   return (cfg && cfg.length >= 7) ? cfg : getPeriodo15Actual();
 }
 
-/** Suscribirse a cambios en tiempo real desde Firebase */
+/**
+ * Suscribirse a cambios en tiempo real desde Firebase.
+ * @param {(data: object) => void} callback
+ */
 export function subscribeToDataUpdates(callback) {
   try {
     const dataRef = ref(db, FIREBASE_PATH);
-    return onValue(dataRef, (snapshot) => {
-      if (snapshot.exists()) {
+    return onValue(
+      dataRef,
+      snapshot => {
+        lastRealtimeAt = Date.now();
+        realtimeListening = true;
+        lastCloudReadOk = true;
+        emitSync();
+        if (!snapshot.exists()) return;
         const data = snapshot.val();
         if (!data.profesores) data.profesores = [];
         if (!data.rutinas) data.rutinas = [];
         if (!data.horario) data.horario = [];
         if (!data.gastos) data.gastos = [];
         callback(data);
+      },
+      err => {
+        console.warn('Firebase listener error:', err?.message);
+        realtimeListening = false;
+        emitSync();
       }
-    });
+    );
   } catch (e) {
     console.warn('Firebase listener no disponible:', e.message);
+    realtimeListening = false;
+    emitSync();
   }
 }
