@@ -143,3 +143,37 @@ export function calcularEdad(fechaNacimiento) {
   if (m < 0 || (m === 0 && hoy.getDate() < nac.getDate())) edad--;
   return edad >= 0 ? edad : null;
 }
+
+/**
+ * Si hoy o mañana es el cumpleaños (solo mes/día), según fecha local
+ */
+export function getCumpleanosRelativo(fechaNacimientoStr) {
+  if (!fechaNacimientoStr || String(fechaNacimientoStr).length < 10) return null;
+  const str = String(fechaNacimientoStr).slice(0, 10);
+  const birthMonth = parseInt(str.slice(5, 7), 10) - 1;
+  const birthDay = parseInt(str.slice(8, 10), 10);
+  if (Number.isNaN(birthMonth) || Number.isNaN(birthDay)) return null;
+  const hoy = new Date();
+  if (hoy.getMonth() === birthMonth && hoy.getDate() === birthDay) return 'hoy';
+  const manana = new Date(hoy);
+  manana.setDate(manana.getDate() + 1);
+  if (manana.getMonth() === birthMonth && manana.getDate() === birthDay) return 'manana';
+  return null;
+}
+
+/**
+ * Lista socios que cumplen hoy o mañana (ordenados por nombre)
+ */
+export function listarCumpleanosHoyYManana(socios) {
+  const hoy = [];
+  const manana = [];
+  for (const s of socios || []) {
+    const r = getCumpleanosRelativo(s.fecha_nacimiento);
+    if (r === 'hoy') hoy.push(s);
+    else if (r === 'manana') manana.push(s);
+  }
+  const cmp = (a, b) => (a.nombre || '').localeCompare(b.nombre || '', 'es', { sensitivity: 'base' });
+  hoy.sort(cmp);
+  manana.sort(cmp);
+  return { hoy, manana };
+}

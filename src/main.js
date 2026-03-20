@@ -5,11 +5,40 @@
 
 import { loadData, saveData, saveToLocalSync, getPeriodoActual, subscribeToDataUpdates } from './storage.js';
 import * as fingerprint from './fingerprint.js';
-import { calcularSemaforo, formatMoney, formatDate, getRangoPeriodo15, fechaEnPeriodo15, diasDesdePago, diasRestantes, getPeriodoDesdeFecha, getPeriodoAnterior, calcularEdad } from './utils.js';
+import { calcularSemaforo, formatMoney, formatDate, getRangoPeriodo15, fechaEnPeriodo15, diasDesdePago, diasRestantes, getPeriodoDesdeFecha, getPeriodoAnterior, calcularEdad, listarCumpleanosHoyYManana } from './utils.js';
 import { isAdminAutenticado, setAdminAutenticado, verificarClave, filtrarPorPeriodo15, getPeriodosDisponibles } from './finanzas.js';
 
 let appData = null;
 let adminSubPage = 'profesores';
+
+/** Copia de socios ordenada alfabéticamente por nombre */
+function ordenarSociosCopia(socios) {
+  return [...(socios || [])].sort((a, b) =>
+    (a.nombre || '').localeCompare(b.nombre || '', 'es', { sensitivity: 'base' })
+  );
+}
+
+/** Ordena el array appData.socios en el lugar (persiste orden al guardar) */
+function ordenarSociosAlfabeticamente() {
+  if (!appData?.socios?.length) return;
+  appData.socios.sort((a, b) =>
+    (a.nombre || '').localeCompare(b.nombre || '', 'es', { sensitivity: 'base' })
+  );
+}
+
+function htmlCumpleanosAlerta(sociosFuente) {
+  const { hoy, manana } = listarCumpleanosHoyYManana(sociosFuente);
+  if (!hoy.length && !manana.length) return '';
+  const esc = (t) => String(t || '').replace(/</g, '&lt;').replace(/&/g, '&amp;');
+  const parts = [];
+  if (manana.length) {
+    parts.push(`<p style="margin: 0.35rem 0;"><strong>🔔 Mañana cumple años:</strong> ${manana.map(s => esc(s.nombre)).join(', ')}</p>`);
+  }
+  if (hoy.length) {
+    parts.push(`<p style="margin: 0.35rem 0;"><strong>🎂 ¡Hoy cumple años!</strong> ${hoy.map(s => esc(s.nombre)).join(', ')}</p>`);
+  }
+  return `<div class="cumpleanos-alerta" style="background: linear-gradient(135deg, rgba(168,85,247,0.15), rgba(236,72,153,0.12)); border: 1px solid rgba(168,85,247,0.45); border-radius: 8px; padding: 0.85rem 1rem; margin-bottom: 1rem; line-height: 1.5;">${parts.join('')}</div>`;
+}
 
 // Navegación
 document.querySelectorAll('.nav-btn').forEach(btn => {
@@ -204,7 +233,7 @@ function renderPage(page) {
 // --- DASHBOARD ---
 function renderDashboard(container) {
   const periodo = getPeriodoActual(appData);
-  const socios = (appData.socios || []).slice();
+  const socios = ordenarSociosCopia(appData.socios);
   socios.forEach(s => {
     s._semaforo = calcularSemaforo(s.ultimo_pago);
   });
@@ -216,6 +245,7 @@ function renderDashboard(container) {
   container.innerHTML = `
     <div class="card">
       <h2 class="card-title">Dashboard - Período ${periodo}</h2>
+      ${htmlCumpleanosAlerta(appData.socios)}
       <div class="stats-grid">
         <div class="stat-card stat-card-clickable" data-filter="activo" title="Clic para ver listado">
           <div class="stat-value">${activosList.length}</div>
@@ -290,12 +320,27 @@ function renderDashboard(container) {
   container.querySelectorAll('.stat-card-clickable').forEach(card => {
     card.addEventListener('click', () => mostrarListado(card.dataset.filter));
   });
+
+  const { hoy: toastHoy, manana: toastManana } = listarCumpleanosHoyYManana(appData.socios);
+  if (toastHoy.length || toastManana.length) {
+    const hoyStr = new Date().toISOString().slice(0, 10);
+    const key = `cumple-toast-${hoyStr}`;
+    if (!sessionStorage.getItem(key)) {
+      sessionStorage.setItem(key, '1');
+      setTimeout(() => {
+        const msg = [];
+        if (toastManana.length) msg.push(`Mañana cumple: ${toastManana.map(s => s.nombre).join(', ')}`);
+        if (toastHoy.length) msg.push(`Hoy cumple: ${toastHoy.map(s => s.nombre).join(', ')}`);
+        mostrarToast(msg.join(' · '));
+      }, 500);
+    }
+  }
 }
 
 // --- SOCIOS ---
 function renderSocios(container) {
   const periodo = getPeriodoActual(appData);
-  const socios = (appData.socios || []).slice();
+  const socios = ordenarSociosCopia(appData.socios);
   socios.forEach(s => {
     const sem = calcularSemaforo(s.ultimo_pago);
     s._semaforo = sem;
@@ -304,6 +349,7 @@ function renderSocios(container) {
   const actividades = appData.actividades || [];
 
   let html = `
+    ${htmlCumpleanosAlerta(appData.socios)}
     <div class="card">
       <h2 class="card-title">Agregar nuevo socio (ficha completa)</h2>
       <form id="form-socio" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
@@ -461,6 +507,7 @@ function renderSocios(container) {
     e.preventDefault();
     const nuevoSocio = leerFormSocio(periodo);
     appData.socios.push(nuevoSocio);
+    ordenarSociosAlfabeticamente();
     appData.cuotas.push({
       fecha: nuevoSocio.fecha_alta,
       periodo,
@@ -634,6 +681,7 @@ function abrirModalEditarSocio(socio) {
     socio.huella_id = (hid >= 0 && hid <= 999) ? hid : undefined;
     socio.monto = parseInt(form.monto.value, 10) || 0;
     socio.observaciones = form.observaciones.value.trim();
+    ordenarSociosAlfabeticamente();
     saveData(appData);
     modal.remove();
     renderPage('socios');
@@ -723,7 +771,7 @@ function renderCuotas(container) {
   const periodo = getPeriodoActual(appData);
   const diaFin = appData?.config?.periodo_dia_fin ?? 14;
   const { inicio, fin } = getRangoPeriodo15(periodo, diaFin);
-  const socios = appData.socios || [];
+  const socios = ordenarSociosCopia(appData.socios);
   const cuotas = filtrarPorPeriodo15(appData.cuotas || [], periodo);
   const actividades = appData.actividades || [];
   const periodosDisponibles = getPeriodosDisponibles(appData.cuotas || [], appData.ventas || []);
@@ -1811,7 +1859,7 @@ function imprimirRutina(rutina) {
 function renderActividades(container) {
   const actividades = appData.actividades || [];
   const profesores = [...new Set((appData.profesores || []).map(p => p.nombre))];
-  const socios = appData.socios || [];
+  const socios = ordenarSociosCopia(appData.socios);
   const cuotas = appData.cuotas || [];
 
   const porActividad = {};
@@ -2154,7 +2202,7 @@ function renderHorarios(container) {
 
 // --- ACCESO HUELLA ---
 function renderAccesoHuella(container) {
-  const socios = appData.socios || [];
+  const socios = ordenarSociosCopia(appData.socios);
 
   container.innerHTML = `
     <div class="card">
@@ -2268,7 +2316,7 @@ function renderAccesoHuella(container) {
 // --- MÉTRICAS ---
 function renderMetricas(container, opts = {}) {
   const periodo = getPeriodoActual(appData);
-  const socios = (appData.socios || []).filter(s => {
+  const socios = ordenarSociosCopia(appData.socios).filter(s => {
     const sem = calcularSemaforo(s.ultimo_pago);
     return sem.estado === 'activo' || sem.estado === 'por-vencer';
   });
@@ -2624,7 +2672,7 @@ function sonPosiblesDuplicados(a, b) {
 }
 
 function renderUnificar(container) {
-  const socios = appData.socios || [];
+  const socios = ordenarSociosCopia(appData.socios);
   const duplicados = [];
   const vistos = new Set();
   for (let i = 0; i < socios.length; i++) {
@@ -2682,6 +2730,7 @@ function renderUnificar(container) {
         if (c.nombre === socioRemove.nombre) c.nombre = socioKeep.nombre;
       });
       appData.socios = appData.socios.filter(s => s.id !== removeId);
+      ordenarSociosAlfabeticamente();
       if (socioRemove.ultimo_pago > socioKeep.ultimo_pago) {
         socioKeep.ultimo_pago = socioRemove.ultimo_pago;
         socioKeep.ultimo_periodo = socioRemove.ultimo_periodo;
