@@ -96,20 +96,20 @@ export async function loadData() {
 export function saveToLocalSync(data) {
   if (!data) return;
   const ts = Date.now();
-  const dataToSave = { ...data, _lastSavedAt: ts };
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
+  data._lastSavedAt = ts;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   localStorage.setItem(STORAGE_TIMESTAMP_KEY, String(ts));
 }
 
 export async function saveData(data) {
   const ts = Date.now();
-  const dataToSave = { ...data, _lastSavedAt: ts };
+  data._lastSavedAt = ts;
   // Guardar en localStorage PRIMERO (sincrónico) para no perder datos si falla o se cierra
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(dataToSave));
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   localStorage.setItem(STORAGE_TIMESTAMP_KEY, String(ts));
   try {
     const dataRef = ref(db, FIREBASE_PATH);
-    await set(dataRef, dataToSave);
+    await set(dataRef, data);
     return true;
   } catch (e) {
     console.warn('Firebase save failed, datos guardados en localStorage:', e.message);

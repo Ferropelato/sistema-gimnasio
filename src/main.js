@@ -38,12 +38,17 @@ async function init() {
   setInterval(actualizarFechaHeader, 60000);
   renderPage('dashboard');
 
-  // Actualización en tiempo real desde Firebase (evitar sobrescribir con datos viejos)
+  // Actualización en tiempo real desde Firebase
   subscribeToDataUpdates((data) => {
     const localTs = appData?._lastSavedAt || 0;
     const remoteTs = data?._lastSavedAt || 0;
     if (localTs > remoteTs) {
       saveData(appData);
+      return;
+    }
+    // Eco de nuestro propio guardado: no re-renderizar (evita borrar texto al escribir)
+    if (remoteTs > 0 && remoteTs === localTs) {
+      appData = data;
       return;
     }
     appData = data;
@@ -117,10 +122,19 @@ async function init() {
     }
   });
 
-  // Autoguardado cada 2 min como respaldo (por si falla algo)
-  setInterval(() => {
-    if (appData) saveToLocalSync(appData);
-  }, 2 * 60 * 1000);
+  // Autoguardado tras 5 min de inactividad (solo respaldo local; no dispara re-render)
+  const INACTIVIDAD_MS = 5 * 60 * 1000;
+  let timerInactividad = null;
+  function reiniciarTimerInactividad() {
+    if (timerInactividad) clearTimeout(timerInactividad);
+    timerInactividad = setTimeout(() => {
+      if (appData) saveToLocalSync(appData);
+    }, INACTIVIDAD_MS);
+  }
+  reiniciarTimerInactividad();
+  ['keydown', 'pointerdown', 'input', 'scroll', 'touchstart'].forEach(ev => {
+    document.addEventListener(ev, reiniciarTimerInactividad, { passive: true });
+  });
 }
 
 function mostrarToast(mensaje) {

@@ -45,6 +45,7 @@ c:\Users\Fernando\Desktop\curso desarrollador\gimnasio
 
 - Los datos se guardan en **Firebase** y se sincronizan entre todas las PCs/dispositivos
 - **Respaldo local**: siempre se guarda primero en localStorage; si la app se cierra o hay fallos de red, los datos se recuperan al volver a abrir
+- **Autoguardado por inactividad**: tras **5 minutos** sin escribir, hacer clic, desplazarse ni tocar la pantalla, se hace un respaldo local (no interrumpe lo que estés escribiendo)
 - **Exportar**: descargá un backup JSON (botón 📤) para guardarlo en tu PC
 - **Importar**: restauramos desde un archivo JSON (botón 📥)
 
