@@ -31,7 +31,7 @@ c:\Users\Fernando\Desktop\curso desarrollador\gimnasio
 3. En el celular, conectado al mismo WiFi, abrí: `http://TU_IP:3000` (ej: http://192.168.1.10:3000)
 
 ### Opción 2: PWA (Progressive Web App)
-1. Subí el proyecto a un hosting (Vercel, Netlify, etc.)
+1. Subí el proyecto a un hosting (Veercel, Netlify, etc.)
 2. En el celular, abrí la URL en Chrome
 3. En el menú (⋮) → "Agregar a la pantalla de inicio" o "Instalar app"
 4. Queda como una app instalada
@@ -44,9 +44,13 @@ c:\Users\Fernando\Desktop\curso desarrollador\gimnasio
 ## Datos (Firebase Realtime Database)
 
 - Los datos se guardan en **Firebase** y se sincronizan entre todas las PCs/dispositivos
-- Si Firebase no está disponible, se usa localStorage como respaldo
+- **Respaldo local**: siempre se guarda primero en localStorage; si la app se cierra o hay fallos de red, los datos se recuperan al volver a abrir
 - **Exportar**: descargá un backup JSON (botón 📤) para guardarlo en tu PC
 - **Importar**: restauramos desde un archivo JSON (botón 📥)
+
+### Si se pierden datos
+- Al abrir la app, se usa la versión más reciente entre Firebase y localStorage
+- Si tenés un backup exportado, usá Importar (📥) para restaurarlo
 
 ### Reglas de Firebase Realtime Database
 

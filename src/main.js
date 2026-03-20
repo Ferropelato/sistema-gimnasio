@@ -3,7 +3,7 @@
  * Punto de entrada principal
  */
 
-import { loadData, saveData, getPeriodoActual, subscribeToDataUpdates } from './storage.js';
+import { loadData, saveData, saveToLocalSync, getPeriodoActual, subscribeToDataUpdates } from './storage.js';
 import * as fingerprint from './fingerprint.js';
 import { calcularSemaforo, formatMoney, formatDate, getRangoPeriodo15, fechaEnPeriodo15, diasDesdePago, diasRestantes, getPeriodoDesdeFecha, getPeriodoAnterior, calcularEdad } from './utils.js';
 import { isAdminAutenticado, setAdminAutenticado, verificarClave, filtrarPorPeriodo15, getPeriodosDisponibles } from './finanzas.js';
@@ -38,8 +38,14 @@ async function init() {
   setInterval(actualizarFechaHeader, 60000);
   renderPage('dashboard');
 
-  // Actualización en tiempo real desde Firebase (cuando otra PC modifica)
+  // Actualización en tiempo real desde Firebase (evitar sobrescribir con datos viejos)
   subscribeToDataUpdates((data) => {
+    const localTs = appData?._lastSavedAt || 0;
+    const remoteTs = data?._lastSavedAt || 0;
+    if (localTs > remoteTs) {
+      saveData(appData);
+      return;
+    }
     appData = data;
     const activeBtn = document.querySelector('.nav-btn.active');
     const page = activeBtn?.dataset?.page || 'dashboard';
@@ -90,9 +96,12 @@ async function init() {
   document.body.appendChild(inputImport);
   document.getElementById('btn-importar')?.addEventListener('click', () => inputImport.click());
 
-  // Autoguardado al cerrar / cambiar de pestaña
+  // Autoguardado al cerrar / cambiar de pestaña (localStorage primero, es sincrónico)
   function guardarAlSalir() {
-    if (appData) saveData(appData);
+    if (appData) {
+      saveToLocalSync(appData);
+      saveData(appData);
+    }
   }
   window.addEventListener('beforeunload', guardarAlSalir);
   window.addEventListener('pagehide', guardarAlSalir);
@@ -107,6 +116,11 @@ async function init() {
       intervaloIdle = null;
     }
   });
+
+  // Autoguardado cada 2 min como respaldo (por si falla algo)
+  setInterval(() => {
+    if (appData) saveToLocalSync(appData);
+  }, 2 * 60 * 1000);
 }
 
 function mostrarToast(mensaje) {
