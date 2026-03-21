@@ -3,7 +3,7 @@
  * Punto de entrada principal
  */
 
-import { loadData, saveData, saveToLocalSync, getPeriodoActual, subscribeToDataUpdates, subscribeSyncStatus, pingFirebaseRead } from './storage.js';
+import { loadData, saveData, saveToLocalSync, getPeriodoActual, subscribeToDataUpdates, subscribeSyncStatus, pingFirebaseRead, getSyncState } from './storage.js';
 import * as fingerprint from './fingerprint.js';
 import { calcularSemaforo, formatMoney, formatDate, getRangoPeriodo15, fechaEnPeriodo15, diasDesdePago, diasRestantes, getPeriodoDesdeFecha, getPeriodoAnterior, calcularEdad, listarCumpleanosHoyYManana } from './utils.js';
 import { isAdminAutenticado, setAdminAutenticado, verificarClave, filtrarPorPeriodo15, filtrarCuotasPorPeriodoResumen, getPeriodosDisponibles } from './finanzas.js';
@@ -75,11 +75,12 @@ async function init() {
     await pingFirebaseRead();
     const ok = await saveData(appData);
     btn.disabled = false;
-    mostrarToast(
-      ok
-        ? 'Listo: datos en la nube. Las demás PCs deberían ver lo mismo al abrir o al instante si ya tenían la app abierta.'
-        : 'Sigue sin subir. Revisá Internet, firewall o reglas de Firebase (F12 → consola).'
-    );
+    if (ok) {
+      mostrarToast('Listo: datos en la nube. Las demás PCs deberían ver lo mismo al abrir o al instante si ya tenían la app abierta.');
+    } else {
+      const det = getSyncState().lastFirebaseWriteError;
+      mostrarToast(det || 'Sigue sin subir. Abrí F12 → Consola y copiá el error.', 9000);
+    }
   });
 
   window.addEventListener('online', () => {
@@ -112,9 +113,12 @@ async function init() {
   document.getElementById('btn-guardar')?.addEventListener('click', async () => {
     if (!appData) return;
     const ok = await saveData(appData);
-    mostrarToast(
-      ok ? 'Guardado en la nube: todas las PCs comparten estos datos.' : 'Solo se guardó en este navegador. Revisá la barra de sincronización o la conexión.'
-    );
+    if (ok) {
+      mostrarToast('Guardado en la nube: todas las PCs comparten estos datos.');
+    } else {
+      const det = getSyncState().lastFirebaseWriteError;
+      mostrarToast(det ? 'No subió: ' + det : 'Solo se guardó en este navegador.', 8500);
+    }
   });
 
   // Exportar backup (descarga JSON)
@@ -194,7 +198,7 @@ async function init() {
   });
 }
 
-function mostrarToast(mensaje) {
+function mostrarToast(mensaje, duracionMs = 2500) {
   const toast = document.createElement('div');
   toast.className = 'toast';
   toast.textContent = mensaje;
@@ -203,14 +207,22 @@ function mostrarToast(mensaje) {
   setTimeout(() => {
     toast.classList.remove('show');
     setTimeout(() => toast.remove(), 300);
-  }, 2500);
+  }, duracionMs);
+}
+
+function escSyncMsg(s) {
+  return String(s || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 /** Barra bajo el encabezado: estado de Firebase para la PC del gimnasio y el resto */
 function updateSyncBar(state) {
   const el = document.getElementById('sync-bar');
   if (!el) return;
-  const { lastCloudReadOk, lastCloudWriteOk, pendingCloudSync, lastCloudWriteAt } = state;
+  const { lastCloudReadOk, lastCloudWriteOk, pendingCloudSync, lastCloudWriteAt, lastFirebaseWriteError } = state;
   const hora =
     lastCloudWriteAt > 0
       ? new Date(lastCloudWriteAt).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })
@@ -221,18 +233,24 @@ function updateSyncBar(state) {
     '<button type="button" class="btn btn-secondary btn-sm sync-retry-btn">Subir / reconectar ahora</button>' +
     '</div>';
 
+  const detalleErr = lastFirebaseWriteError
+    ? `<div class="sync-bar-errdetail">${escSyncMsg(lastFirebaseWriteError)}</div>`
+    : '';
+
   if (!lastCloudReadOk) {
     el.className = 'sync-bar sync-bar--err';
     el.innerHTML =
       '<strong>No hay conexión con Firebase.</strong> Estás viendo datos guardados solo en este navegador: <strong>otras PCs no se actualizan</strong> hasta reconectar. ' +
-      acciones;
+      acciones +
+      detalleErr;
     return;
   }
   if (pendingCloudSync || !lastCloudWriteOk) {
     el.className = 'sync-bar sync-bar--warn';
     el.innerHTML =
-      '<strong>Cambios sin confirmar en la nube.</strong> Lo último puede no verse en otra PC. Revisá WiFi o reglas de Firebase. ' +
-      acciones;
+      '<strong>Cambios sin confirmar en la nube.</strong> Lo último puede no verse en otra PC. Abajo el <strong>motivo técnico</strong> (si dice PERMISSION_DENIED, son las <strong>reglas de escritura</strong> en Firebase). ' +
+      acciones +
+      detalleErr;
     return;
   }
   el.className = 'sync-bar sync-bar--ok';

@@ -17,7 +17,7 @@ const SAVE_RETRY_BASE_MS = 450;
 /** @type {Array<(s: SyncState) => void>} */
 let syncListeners = [];
 
-/** @typedef {{ lastCloudReadOk: boolean, lastCloudWriteOk: boolean, lastCloudWriteAt: number, pendingCloudSync: boolean, lastRealtimeAt: number, realtimeListening: boolean }} SyncState */
+/** @typedef {{ lastCloudReadOk: boolean, lastCloudWriteOk: boolean, lastCloudWriteAt: number, pendingCloudSync: boolean, lastRealtimeAt: number, realtimeListening: boolean, lastFirebaseWriteError: string }} SyncState */
 
 let lastCloudReadOk = true;
 let lastCloudWriteOk = true;
@@ -25,6 +25,28 @@ let lastCloudWriteAt = 0;
 let pendingCloudSync = false;
 let lastRealtimeAt = 0;
 let realtimeListening = false;
+/** Último error al subir (para mostrar en la barra; suele ser reglas .write en Firebase) */
+let lastFirebaseWriteError = '';
+
+function formatFirebaseError(e) {
+  const code = e?.code || '';
+  const msg = (e?.message || String(e || '')).trim();
+  if (code === 'PERMISSION_DENIED') {
+    return 'Permiso denegado (PERMISSION_DENIED). En Firebase → Realtime Database → Reglas debe haber .write: true en la ruta gym (no solo lectura). Publicá los cambios.';
+  }
+  if (code === 'UNAVAILABLE') {
+    return 'Servicio no disponible temporalmente. Reintentá en unos minutos.';
+  }
+  if (/network|failed to fetch|load failed/i.test(msg)) {
+    return 'Error de red al hablar con Firebase: ' + (msg.slice(0, 120) || code || 'sin detalle');
+  }
+  return (code ? code + ': ' : '') + (msg.slice(0, 180) || 'Error desconocido');
+}
+
+/** Clona datos para RTDB: evita undefined/funciones que a veces rompen el envío */
+function cloneForFirebase(data) {
+  return JSON.parse(JSON.stringify(data));
+}
 
 function emitSync() {
   const state = getSyncState();
@@ -52,7 +74,8 @@ export function getSyncState() {
     lastCloudWriteAt,
     pendingCloudSync,
     lastRealtimeAt,
-    realtimeListening
+    realtimeListening,
+    lastFirebaseWriteError
   };
 }
 
@@ -65,6 +88,7 @@ export async function pingFirebaseRead() {
     return true;
   } catch (e) {
     lastCloudReadOk = false;
+    lastFirebaseWriteError = formatFirebaseError(e);
     emitSync();
     return false;
   }
@@ -97,6 +121,7 @@ export async function loadData() {
   } catch (e) {
     console.warn('Firebase no disponible, usando localStorage:', e.message);
     lastCloudReadOk = false;
+    lastFirebaseWriteError = formatFirebaseError(e);
   }
 
   const stored = localStorage.getItem(STORAGE_KEY);
@@ -189,19 +214,34 @@ export async function saveData(data) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   localStorage.setItem(STORAGE_TIMESTAMP_KEY, String(ts));
 
+  let payload;
+  try {
+    payload = cloneForFirebase(data);
+    payload._lastSavedAt = ts;
+  } catch (err) {
+    lastFirebaseWriteError = 'No se pudieron preparar los datos para la nube (revisá que no haya valores raros). ' + (err?.message || '');
+    lastCloudWriteOk = false;
+    pendingCloudSync = true;
+    emitSync();
+    console.error('cloneForFirebase', err);
+    return false;
+  }
+
   const dataRef = ref(db, FIREBASE_PATH);
   let lastErr = null;
   for (let attempt = 0; attempt < SAVE_RETRIES; attempt++) {
     try {
-      await set(dataRef, data);
+      await set(dataRef, payload);
       lastCloudWriteOk = true;
       lastCloudWriteAt = Date.now();
       pendingCloudSync = false;
+      lastFirebaseWriteError = '';
       emitSync();
       return true;
     } catch (e) {
       lastErr = e;
-      console.warn(`Firebase save intento ${attempt + 1}/${SAVE_RETRIES}:`, e.message);
+      lastFirebaseWriteError = formatFirebaseError(e);
+      console.warn(`Firebase save intento ${attempt + 1}/${SAVE_RETRIES}:`, e?.code, e?.message);
       if (attempt < SAVE_RETRIES - 1) {
         await new Promise(r => setTimeout(r, SAVE_RETRY_BASE_MS * (attempt + 1)));
       }
@@ -210,7 +250,7 @@ export async function saveData(data) {
   lastCloudWriteOk = false;
   pendingCloudSync = true;
   emitSync();
-  console.warn('Firebase save failed tras reintentos, datos guardados en localStorage:', lastErr?.message);
+  console.warn('Firebase save failed tras reintentos, datos guardados en localStorage:', lastErr?.code, lastErr?.message);
   return false;
 }
 

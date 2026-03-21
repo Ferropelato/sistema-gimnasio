@@ -77,6 +77,15 @@ En Firebase Console → Realtime Database → Reglas, usá:
 }
 ```
 
+Pulsá **Publicar** después de pegar las reglas. Si no publicás, el servidor sigue con la regla anterior.
+
+#### Barra amarilla: “no sube” pero el Internet anda
+
+1. Recargá la página con la última versión de la app: la barra ahora muestra el **motivo técnico** debajo (y al tocar “Subir / reconectar” un cartel más largo).
+2. Si dice **PERMISSION_DENIED**: Firebase está **bloqueando el guardado**. Revisá que en Reglas exista **`.write": true`** para `gym` (no solo lectura). Reglas por defecto suelen ser `read/write: false` para todo.
+3. En la misma consola, pestaña **Realtime Database** (no Firestore): la app usa **Realtime Database** con la URL `…firebaseio.com` del proyecto.
+4. Si las reglas están bien y sigue fallando: F12 → **Consola** y **Red** (filtrá por `firebaseio`) y mirá si la petición devuelve 401/403.
+
 Para producción, considerá restringir con autenticación.
 
 ## Deploy (Vercel + GitHub)
