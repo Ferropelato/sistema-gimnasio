@@ -34,11 +34,27 @@ export function filtrarPorPeriodo15(items, periodo, campoFecha = 'fecha') {
   return items.filter(i => fechaEnPeriodo15(i[campoFecha], periodo));
 }
 
+/**
+ * Cuotas que cuentan para el resumen de un período: por fecha calendario del pago
+ * o por imputación manual (deuda de un mes, dinero que entra en la caja de otro).
+ */
+export function filtrarCuotasPorPeriodoResumen(cuotas, periodo, diaFin = 14) {
+  if (!periodo) return cuotas || [];
+  const p = String(periodo).slice(0, 7);
+  return (cuotas || []).filter(c => {
+    const imp = c.periodo_recaudacion && String(c.periodo_recaudacion).slice(0, 7);
+    if (imp === p) return true;
+    return fechaEnPeriodo15(c.fecha, periodo, diaFin);
+  });
+}
+
 export function getPeriodosDisponibles(cuotas, ventas) {
   const fechas = new Set();
   [...(cuotas || []), ...(ventas || [])].forEach(x => {
     const f = (x.fecha || '').slice(0, 7);
     if (f) fechas.add(f);
+    const pr = x.periodo_recaudacion && String(x.periodo_recaudacion).slice(0, 7);
+    if (pr) fechas.add(pr);
   });
   const hoy = new Date();
   for (let i = 0; i < 12; i++) {

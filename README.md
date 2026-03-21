@@ -15,7 +15,7 @@ Se abrirá el navegador en `http://localhost:3000`
 
 - **Dashboard**: Resumen de socios activos, por vencer, vencidos e ingresos
 - **Socios**: Ficha completa (nombre, DNI, teléfono, email, dirección). Editar y enviar WhatsApp (por vencer, vencido, novedad)
-- **Cuotas**: Registrar pagos y renovaciones. Actualiza automáticamente el estado del socio
+- **Cuotas**: Registrar pagos y renovaciones. Podés poner la fecha del mes adeudado e **imputar la recaudación al período actual** (caja / liquidación al profe). Actualiza el estado del socio
 - **Ventas**: Productos y bebidas. El stock se descuenta automáticamente
 - **Stock**: Ver stock actual y agregar unidades
 - **Actividades**: Musculación, CrossFit, Spinning, Funcional, Pase Diario, Mixto, Taekwondo, etc.

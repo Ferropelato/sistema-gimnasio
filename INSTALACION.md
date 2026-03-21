@@ -41,6 +41,10 @@ c:\Users\Fernando\Desktop\curso desarrollador\gimnasio
 2. Usá un servidor que sirva la carpeta `dist` (ej: `npx serve dist`)
 3. En el celular, conectado a la misma red, abrí la IP mostrada
 
+## Cuotas: mes adeudado vs período de caja
+
+Si un socio paga hoy una **deuda del mes pasado**, podés poner la **fecha del pago** en ese mes y, en **Imputar a recaudación del período**, elegir el **período actual**. Así el movimiento aparece en el resumen de este mes (Finanzas, liquidación en Profesores) aunque la fecha sea anterior. Si ya cargaste el pago sin eso, abrilo con ✏️ y asigná el período de recaudación.
+
 ## Datos (Firebase Realtime Database)
 
 - Los datos se guardan en **Firebase** y se sincronizan entre todas las PCs/dispositivos

@@ -6,7 +6,7 @@
 import { loadData, saveData, saveToLocalSync, getPeriodoActual, subscribeToDataUpdates, subscribeSyncStatus, pingFirebaseRead } from './storage.js';
 import * as fingerprint from './fingerprint.js';
 import { calcularSemaforo, formatMoney, formatDate, getRangoPeriodo15, fechaEnPeriodo15, diasDesdePago, diasRestantes, getPeriodoDesdeFecha, getPeriodoAnterior, calcularEdad, listarCumpleanosHoyYManana } from './utils.js';
-import { isAdminAutenticado, setAdminAutenticado, verificarClave, filtrarPorPeriodo15, getPeriodosDisponibles } from './finanzas.js';
+import { isAdminAutenticado, setAdminAutenticado, verificarClave, filtrarPorPeriodo15, filtrarCuotasPorPeriodoResumen, getPeriodosDisponibles } from './finanzas.js';
 
 let appData = null;
 let adminSubPage = 'profesores';
@@ -836,7 +836,7 @@ function renderCuotas(container) {
   const diaFin = appData?.config?.periodo_dia_fin ?? 14;
   const { inicio, fin } = getRangoPeriodo15(periodo, diaFin);
   const socios = ordenarSociosCopia(appData.socios);
-  const cuotas = filtrarPorPeriodo15(appData.cuotas || [], periodo);
+  const cuotas = filtrarCuotasPorPeriodoResumen(appData.cuotas || [], periodo, diaFin);
   const actividades = appData.actividades || [];
   const periodosDisponibles = getPeriodosDisponibles(appData.cuotas || [], appData.ventas || []);
 
@@ -854,6 +854,18 @@ function renderCuotas(container) {
         <div class="form-group">
           <label>Fecha del pago</label>
           <input type="date" id="cuota-fecha" value="${new Date().toISOString().slice(0, 10)}" />
+          <small style="color: var(--text-secondary); display: block; margin-top: 0.25rem;">Podés poner la fecha del mes que estaba debiendo; para que figure en el resumen de <strong>este</strong> período de caja usá la opción de abajo.</small>
+        </div>
+        <div class="form-group">
+          <label>Imputar a recaudación del período (caja / liquidación)</label>
+          <select id="cuota-periodo-recaudacion">
+            <option value="">Automático: según la fecha del pago</option>
+            ${periodosDisponibles.map(p => {
+              const r = getRangoPeriodo15(p, diaFin);
+              return `<option value="${p}">${p} (${r.inicio} → ${r.fin})</option>`;
+            }).join('')}
+          </select>
+          <small style="color: var(--text-secondary); display: block; margin-top: 0.25rem;">Ej.: deuda de febrero cobrada en marzo → fecha en febrero y acá elegís el período actual para que sume al profe y al resumen de este mes.</small>
         </div>
         <div class="form-group">
           <label>Socio</label>
@@ -962,9 +974,12 @@ function renderCuotas(container) {
               const idx = appData.cuotas.findIndex(x => x === c);
               const pct = c.descuento_porcentaje != null && c.descuento_porcentaje > 0 ? `${c.descuento_porcentaje}%` : '—';
               const motDesc = (c.descuento_motivo || '').trim();
+              const recLabel = c.periodo_recaudacion
+                ? `<br><small style="color:var(--text-secondary)">Recaudación ${c.periodo_recaudacion}</small>`
+                : '';
               return `
               <tr>
-                <td>${formatDate(c.fecha)}</td>
+                <td>${formatDate(c.fecha)}${recLabel}</td>
                 <td>${c.nombre}</td>
                 <td>${c.actividad || '-'}</td>
                 <td>${formatMoney(c.monto)}${c.monto_tarifa != null && c.monto_tarifa > (c.monto || 0) ? `<br><small style="color:var(--text-secondary)">Tarifa ${formatMoney(c.monto_tarifa)}</small>` : ''}</td>
@@ -974,7 +989,7 @@ function renderCuotas(container) {
                 <td>${c.metodo || '-'}</td>
                 <td>${c.tipo || '-'}</td>
                 <td style="white-space:nowrap">
-                  <button type="button" class="btn btn-secondary btn-sm" data-editar-cuota="${idx}" title="Editar fecha">✏️</button>
+                  <button type="button" class="btn btn-secondary btn-sm" data-editar-cuota="${idx}" title="Editar fecha e imputación">✏️</button>
                   <button type="button" class="btn btn-secondary btn-sm" data-eliminar-cuota="${idx}" title="Eliminar este registro de pago" style="margin-left:4px;color:var(--semaforo-rojo)">🗑️</button>
                 </td>
               </tr>
@@ -999,9 +1014,12 @@ function renderCuotas(container) {
       const idx = appData.cuotas.findIndex(x => x === c);
       const pct = c.descuento_porcentaje != null && c.descuento_porcentaje > 0 ? `${c.descuento_porcentaje}%` : '—';
       const motDesc = (c.descuento_motivo || '').trim();
+      const recLabelF = c.periodo_recaudacion
+        ? `<br><small style="color:var(--text-secondary)">Recaudación ${c.periodo_recaudacion}</small>`
+        : '';
       return `
         <tr>
-          <td>${formatDate(c.fecha)}</td>
+          <td>${formatDate(c.fecha)}${recLabelF}</td>
           <td>${c.nombre}</td>
           <td>${c.actividad || '-'}</td>
           <td>${formatMoney(c.monto)}${c.monto_tarifa != null && c.monto_tarifa > (c.monto || 0) ? `<br><small style="color:var(--text-secondary)">Tarifa ${formatMoney(c.monto_tarifa)}</small>` : ''}</td>
@@ -1011,7 +1029,7 @@ function renderCuotas(container) {
           <td>${c.metodo || '-'}</td>
           <td>${c.tipo || '-'}</td>
           <td style="white-space:nowrap">
-            <button type="button" class="btn btn-secondary btn-sm" data-editar-cuota="${idx}" title="Editar fecha">✏️</button>
+            <button type="button" class="btn btn-secondary btn-sm" data-editar-cuota="${idx}" title="Editar fecha e imputación">✏️</button>
             <button type="button" class="btn btn-secondary btn-sm" data-eliminar-cuota="${idx}" title="Eliminar este registro de pago" style="margin-left:4px;color:var(--semaforo-rojo)">🗑️</button>
           </td>
         </tr>
@@ -1095,6 +1113,7 @@ function renderCuotas(container) {
     const tipo = document.getElementById('cuota-tipo').value;
     const obs = document.getElementById('cuota-obs').value;
     const actividadPase = (document.getElementById('cuota-actividad-pase')?.value || '').trim();
+    const periodoRecaudacionSel = (document.getElementById('cuota-periodo-recaudacion')?.value || '').trim().slice(0, 7);
 
     const hoy = document.getElementById('cuota-fecha').value || new Date().toISOString().slice(0, 10);
     const periodoReal = getPeriodoDesdeFecha(hoy) || periodo;
@@ -1130,6 +1149,9 @@ function renderCuotas(container) {
       cuotaReg.monto_tarifa = montoTarifa;
       cuotaReg.descuento_porcentaje = descPct;
       cuotaReg.descuento_motivo = descMotivo;
+    }
+    if (periodoRecaudacionSel && /^\d{4}-\d{2}$/.test(periodoRecaudacionSel)) {
+      cuotaReg.periodo_recaudacion = periodoRecaudacionSel;
     }
     if (btnCuotaSubmit) btnCuotaSubmit.disabled = true;
     appData.cuotas.push(cuotaReg);
@@ -1254,12 +1276,23 @@ function renderVentas(container) {
 
 function abrirModalEditarFechaCuota(cuota) {
   if (!cuota) return;
+  const diaFin = appData?.config?.periodo_dia_fin ?? 14;
+  const periodosDisponibles = getPeriodosDisponibles(appData.cuotas || [], appData.ventas || []);
+  const currentPr = (cuota.periodo_recaudacion || '').slice(0, 7);
+  const optsPeriodoRec = periodosDisponibles
+    .map(p => {
+      const r = getRangoPeriodo15(p, diaFin);
+      const sel = p === currentPr ? ' selected' : '';
+      return `<option value="${p}"${sel}>${p} (${r.inicio} → ${r.fin})</option>`;
+    })
+    .join('');
+  const selAuto = !currentPr ? ' selected' : '';
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
   modal.innerHTML = `
     <div class="modal">
       <div class="modal-header">
-        <h3>Editar fecha de pago</h3>
+        <h3>Editar pago</h3>
         <button type="button" class="btn-cerrar" aria-label="Cerrar">&times;</button>
       </div>
       <div class="modal-body">
@@ -1267,6 +1300,14 @@ function abrirModalEditarFechaCuota(cuota) {
         <div class="form-group">
           <label>Fecha del pago</label>
           <input type="date" id="cuota-editar-fecha" value="${cuota.fecha || ''}" />
+        </div>
+        <div class="form-group">
+          <label>Imputar a recaudación del período</label>
+          <select id="cuota-editar-periodo-rec">
+            <option value=""${selAuto}>Automático (según fecha)</option>
+            ${optsPeriodoRec}
+          </select>
+          <small style="color: var(--text-secondary); display: block; margin-top: 0.25rem;">Elegí el período de caja donde debe sumar (ej. mes actual aunque la fecha sea del mes adeudado).</small>
         </div>
         <div class="modal-footer" style="margin-top: 1rem;">
           <button type="button" class="btn btn-primary" id="cuota-guardar-fecha">Guardar</button>
@@ -1277,15 +1318,17 @@ function abrirModalEditarFechaCuota(cuota) {
   document.body.appendChild(modal);
   modal.querySelector('.btn-cerrar').onclick = () => modal.remove();
   modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
-  modal.querySelector('#cuota-guardar-fecha').onclick = () => {
+  modal.querySelector('#cuota-guardar-fecha').onclick = async () => {
     const nuevaFecha = modal.querySelector('#cuota-editar-fecha').value;
-    if (nuevaFecha) {
-      cuota.fecha = nuevaFecha;
-      cuota.periodo = getPeriodoDesdeFecha(nuevaFecha) || cuota.periodo;
-      saveData(appData);
-      modal.remove();
-      renderPage('cuotas');
-    }
+    if (!nuevaFecha) return;
+    cuota.fecha = nuevaFecha;
+    cuota.periodo = getPeriodoDesdeFecha(nuevaFecha) || cuota.periodo;
+    const pr = (modal.querySelector('#cuota-editar-periodo-rec')?.value || '').trim().slice(0, 7);
+    if (pr && /^\d{4}-\d{2}$/.test(pr)) cuota.periodo_recaudacion = pr;
+    else delete cuota.periodo_recaudacion;
+    await saveData(appData);
+    modal.remove();
+    renderPage('cuotas');
   };
 }
 
@@ -1492,7 +1535,7 @@ function renderProfesores(container, opts = {}) {
   const refresh = () => (isAdmin ? (adminSubPage = 'profesores', renderPage('admin')) : renderPage('profesores'));
   const profesores = appData.profesores || [];
   const periodo = getPeriodoActual(appData);
-  const cuotas = (appData.cuotas || []).filter(c => c.periodo === periodo);
+  const cuotas = (appData.cuotas || []).filter(c => (c.periodo_recaudacion || c.periodo) === periodo);
 
   const liquidacion = {};
   cuotas.forEach(c => {
@@ -2858,13 +2901,13 @@ function renderFinanzas(container, opts = {}) {
   const { inicio, fin } = getRangoPeriodo15(periodo, diaFin);
 
   // Período actual (15-03 al 14-04): lo que se junta desde el 15
-  const cuotas = filtrarPorPeriodo15(appData.cuotas || [], periodo);
+  const cuotas = filtrarCuotasPorPeriodoResumen(appData.cuotas || [], periodo, diaFin);
   const ventas = filtrarPorPeriodo15(appData.ventas || [], periodo);
 
   // Período anterior (15-02 al 14-03): recaudado, liquidación profes, balance
   const periodoAnterior = getPeriodoAnterior(periodo);
   const { inicio: inicioAnt, fin: finAnt } = getRangoPeriodo15(periodoAnterior || '', diaFin);
-  const cuotasPeriodoAnterior = filtrarPorPeriodo15(appData.cuotas || [], periodoAnterior);
+  const cuotasPeriodoAnterior = filtrarCuotasPorPeriodoResumen(appData.cuotas || [], periodoAnterior, diaFin);
   const ventasPeriodoAnterior = filtrarPorPeriodo15(appData.ventas || [], periodoAnterior);
   const cobrosAlqAnterior = filtrarPorPeriodo15(appData.cobros_alquiler || [], periodoAnterior);
   const gastosPeriodoAnterior = filtrarPorPeriodo15(appData.gastos || [], periodoAnterior);
@@ -3214,7 +3257,7 @@ function renderFinanzas(container, opts = {}) {
   });
 
   const actualizarResumenPeriodo = (p) => {
-    const c = filtrarPorPeriodo15(appData.cuotas || [], p);
+    const c = filtrarCuotasPorPeriodoResumen(appData.cuotas || [], p, diaFin);
     const v = filtrarPorPeriodo15(appData.ventas || [], p);
     const g = filtrarPorPeriodo15(appData.gastos || [], p);
     const ic = c.reduce((s, x) => s + (x.monto || 0), 0);

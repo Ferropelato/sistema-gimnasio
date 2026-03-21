@@ -21,11 +21,11 @@ export function getRangoPeriodo15(periodo, diaFin = 14) {
 }
 
 /**
- * Verifica si una fecha cae dentro del período 15-15
+ * Verifica si una fecha cae dentro del período 15–14 (o el día de fin configurado)
  */
-export function fechaEnPeriodo15(fechaStr, periodo) {
+export function fechaEnPeriodo15(fechaStr, periodo, diaFin = 14) {
   if (!fechaStr || !periodo) return false;
-  const { inicio, fin } = getRangoPeriodo15(periodo);
+  const { inicio, fin } = getRangoPeriodo15(periodo, diaFin);
   const fecha = (fechaStr + '').slice(0, 10);
   return fecha >= inicio && fecha <= fin;
 }
