@@ -50,7 +50,7 @@ Si un socio paga hoy una **deuda del mes pasado**, podés poner la **fecha del p
 - Los datos se guardan en **Firebase** y se sincronizan entre todas las PCs/dispositivos
 - **Barra bajo el menú (verde / amarillo / rojo):** indica si lo que hacés **llegó a la nube**. En la **PC del gimnasio**, antes de cerrar, comprobá **Nube OK** en verde; si está en rojo o amarillo, tocá **Subir / reconectar** o **💾 Guardar** hasta que pase a verde (y revisá WiFi o reglas de Firebase).
 - Al guardar, la app **reintenta varias veces** si la red falla. Si volvés el WiFi, al recuperar conexión intenta subir solo.
-- Al abrir la app, si Firebase responde, **prevalece lo que está en la nube** (así otra PC no “pisa” con un caché viejo del navegador). Si en una PC cargás socios y en otra no aparecen, revisá la consola del navegador (F12): suele ser fallo de red o reglas de Firebase al guardar.
+- Al abrir la app: si Firebase responde, en general **prevalece la nube**. Si en este navegador hay una copia **más reciente** (por un guardado que no llegó a subirse), la app **recupera esa copia e intenta subirla** de nuevo. Si en una PC cargás socios y en otra no aparecen, revisá la barra (amarillo = no confirmado en la nube), la consola (F12) y las reglas de Firebase.
 - **Respaldo local**: siempre se guarda primero en localStorage; si la app se cierra o hay fallos de red, los datos se recuperan al volver a abrir en **ese mismo navegador**
 - **Autoguardado por inactividad**: tras **5 minutos** sin escribir, hacer clic, desplazarse ni tocar la pantalla, se hace un respaldo local (no interrumpe lo que estés escribiendo)
 - **Exportar**: descargá un backup JSON (botón 📤) para guardarlo en tu PC
@@ -64,7 +64,11 @@ Si un socio paga hoy una **deuda del mes pasado**, podés poner la **fecha del p
 
 ### Reglas de Firebase Realtime Database
 
-En Firebase Console → Realtime Database → Reglas, usá:
+Los datos viven en la ruta **`gym/data`** (Realtime Database, no Firestore). Hace falta que exista la base **Realtime** en el proyecto y que las reglas permitan leer y escribir bajo **`gym`**.
+
+En el repo tenés el archivo **`database.rules.json`** con las reglas recomendadas. Debe coincidir con lo que ves en la consola.
+
+En Firebase Console → **Realtime Database** → **Reglas**, debe quedar equivalente a:
 
 ```json
 {
@@ -77,7 +81,16 @@ En Firebase Console → Realtime Database → Reglas, usá:
 }
 ```
 
-Pulsá **Publicar** después de pegar las reglas. Si no publicás, el servidor sigue con la regla anterior.
+**Errores típicos que hacen que “falle constantemente”:**
+
+- Reglas pegadas en **Firestore** en lugar de **Realtime Database** (son productos distintos).
+- Solo **`.read": true`** y **sin** **`.write": true`** en `gym` → la app lee bien (barra puede verse bien al leer) pero **el guardado devuelve PERMISSION_DENIED**.
+- Reglas con un typo en la clave (`"gim"` en vez de `"gym"`) → la ruta real `gym/data` queda sin permiso.
+- Olvidaste pulsar **Publicar** tras editar.
+
+**Subir reglas desde la PC (opcional):** con [Firebase CLI](https://firebase.google.com/docs/cli) logueado al proyecto `gestion-center-gym-yacanto`, en la carpeta del repo: `firebase deploy --only database` (usa `firebase.json` + `database.rules.json`).
+
+Pulsá **Publicar** después de pegar las reglas en la consola. Si no publicás, el servidor sigue con la regla anterior.
 
 #### Barra amarilla: “no sube” pero el Internet anda
 

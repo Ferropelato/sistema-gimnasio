@@ -11,8 +11,8 @@ const FIREBASE_PATH = 'gym/data';
 const STORAGE_KEY = 'center-gym-data';
 const STORAGE_TIMESTAMP_KEY = 'center-gym-data-saved-at';
 
-const SAVE_RETRIES = 4;
-const SAVE_RETRY_BASE_MS = 450;
+const SAVE_RETRIES = 6;
+const SAVE_RETRY_BASE_MS = 500;
 
 /** @type {Array<(s: SyncState) => void>} */
 let syncListeners = [];
@@ -139,11 +139,19 @@ export async function loadData() {
 
   let data = null;
   if (dataFirebase) {
-    data = dataFirebase;
-    if (data._lastSavedAt) {
-      lastCloudWriteAt = data._lastSavedAt;
-      lastCloudWriteOk = true;
-      pendingCloudSync = false;
+    const remoteTs = dataFirebase._lastSavedAt || 0;
+    const localTs = dataLocal?._lastSavedAt || 0;
+    /** Si el último guardado a la nube falló, local puede ser más nuevo que Firebase; no pisar esos datos al recargar. */
+    if (dataLocal && localTs > remoteTs) {
+      data = dataLocal;
+      await saveData(data);
+    } else {
+      data = dataFirebase;
+      if (data._lastSavedAt) {
+        lastCloudWriteAt = data._lastSavedAt;
+        lastCloudWriteOk = true;
+        pendingCloudSync = false;
+      }
     }
     const ts = data._lastSavedAt || Date.now();
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
@@ -195,13 +203,19 @@ export async function loadData() {
   }
 }
 
-/** Guardado sincrónico solo a localStorage (para beforeunload/crash) */
+/**
+ * Guardado sincrónico solo a localStorage (beforeunload, pestaña oculta, inactividad).
+ * No debe tocar _lastSavedAt: si no, la copia local parece “más nueva” que Firebase sin haber
+ * subido, y el listener en tiempo real puede volver a subir datos viejos y pisar a otra PC.
+ */
 export function saveToLocalSync(data) {
   if (!data) return;
-  const ts = Date.now();
-  data._lastSavedAt = ts;
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-  localStorage.setItem(STORAGE_TIMESTAMP_KEY, String(ts));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    localStorage.setItem(STORAGE_TIMESTAMP_KEY, String(Date.now()));
+  } catch (e) {
+    console.warn('saveToLocalSync', e);
+  }
 }
 
 /**
@@ -301,11 +315,8 @@ export function subscribeToDataUpdates(callback) {
         lastCloudReadOk = true;
         emitSync();
         if (!snapshot.exists()) return;
-        const data = snapshot.val();
-        if (!data.profesores) data.profesores = [];
-        if (!data.rutinas) data.rutinas = [];
-        if (!data.horario) data.horario = [];
-        if (!data.gastos) data.gastos = [];
+        const data = normalizeData(snapshot.val());
+        if (!data) return;
         callback(data);
       },
       err => {
