@@ -5,7 +5,7 @@
 
 import { loadData, saveData, saveToLocalSync, getPeriodoActual, subscribeToDataUpdates, subscribeSyncStatus, pingFirebaseRead, getSyncState } from './storage.js';
 import * as fingerprint from './fingerprint.js';
-import { calcularSemaforo, formatMoney, formatDate, getRangoPeriodo15, fechaEnPeriodo15, diasDesdePago, diasRestantes, getPeriodoDesdeFecha, getPeriodoAnterior, calcularEdad, listarCumpleanosHoyYManana, getCategoriaSocioListado, DIAS_INACTIVO_LISTADO } from './utils.js';
+import { calcularSemaforo, formatMoney, formatDate, getRangoPeriodo15, fechaEnPeriodo15, diasDesdePago, diasRestantes, getPeriodoDesdeFecha, getPeriodoAnterior, calcularEdad, listarCumpleanosHoyYManana, getCategoriaSocioListado, getFechaUltimoPagoEfectivo, DIAS_INACTIVO_LISTADO } from './utils.js';
 import { isAdminAutenticado, setAdminAutenticado, verificarClave, filtrarPorPeriodo15, filtrarCuotasPorPeriodoResumen, getPeriodosDisponibles } from './finanzas.js';
 
 let appData = null;
@@ -315,10 +315,13 @@ function renderPage(page) {
 // --- DASHBOARD ---
 function renderDashboard(container) {
   const periodo = getPeriodoActual(appData);
+  const cuotas = appData.cuotas || [];
   const socios = ordenarSociosCopia(appData.socios);
   socios.forEach(s => {
-    s._semaforo = calcularSemaforo(s.ultimo_pago);
-    s._catListado = getCategoriaSocioListado(s.ultimo_pago);
+    s._fechaUltimoPagoEfectivo = getFechaUltimoPagoEfectivo(s, cuotas);
+    const fechaRef = s._fechaUltimoPagoEfectivo || s.ultimo_pago;
+    s._semaforo = calcularSemaforo(fechaRef);
+    s._catListado = getCategoriaSocioListado(fechaRef);
   });
 
   const activosList = socios.filter(s => s._catListado === 'activo');
@@ -392,7 +395,7 @@ function renderDashboard(container) {
         <td>${s.nombre}</td>
         <td>${s.telefono || '-'}</td>
         <td>${s.actividad || '-'}</td>
-        <td>${formatDate(s.ultimo_pago)}</td>
+        <td>${formatDate(s._fechaUltimoPagoEfectivo || s.ultimo_pago)}</td>
         <td>${formatMoney(s.monto)}</td>
       </tr>
     `).join('');
@@ -430,11 +433,13 @@ function renderDashboard(container) {
 // --- SOCIOS ---
 function renderSocios(container) {
   const periodo = getPeriodoActual(appData);
+  const cuotas = appData.cuotas || [];
   const socios = ordenarSociosCopia(appData.socios);
   socios.forEach(s => {
-    const sem = calcularSemaforo(s.ultimo_pago);
-    s._semaforo = sem;
-    s._catListado = getCategoriaSocioListado(s.ultimo_pago);
+    s._fechaUltimoPagoEfectivo = getFechaUltimoPagoEfectivo(s, cuotas);
+    const fechaRef = s._fechaUltimoPagoEfectivo || s.ultimo_pago;
+    s._semaforo = calcularSemaforo(fechaRef);
+    s._catListado = getCategoriaSocioListado(fechaRef);
   });
 
   const actividades = appData.actividades || [];
@@ -555,7 +560,8 @@ function renderSocios(container) {
   function renderRows(list) {
     tbody.innerHTML = list.map(s => {
       const edad = calcularEdad(s.fecha_nacimiento);
-      const cat = s._catListado || getCategoriaSocioListado(s.ultimo_pago);
+      const fechaRef = s._fechaUltimoPagoEfectivo || s.ultimo_pago;
+      const cat = s._catListado || getCategoriaSocioListado(fechaRef);
       const semLabel =
         cat === 'activo' ? 'Al día'
           : cat === 'por-vencer' ? `Vence en ${s._semaforo.dias}d`
@@ -571,7 +577,7 @@ function renderSocios(container) {
         <td>${s.actividad || '-'}</td>
         <td>${s.dias_semana || '-'}</td>
         <td>${(s.planilla_deslinde && s.planilla_medica) ? '✓' : (s.planilla_deslinde || s.planilla_medica) ? '⚠ Parcial' : '❌'}</td>
-        <td>${formatDate(s.ultimo_pago)}</td>
+        <td>${formatDate(s._fechaUltimoPagoEfectivo || s.ultimo_pago)}</td>
         <td>${formatMoney(s.monto)}</td>
         <td class="acciones-socio">
           <button type="button" class="btn btn-secondary btn-sm" data-editar="${s.id}" title="Editar ficha">✏️</button>
@@ -648,7 +654,6 @@ function leerFormSocio(periodo) {
 
 function abrirModalEditarSocio(socio) {
   const periodo = getPeriodoActual(appData);
-  const sem = calcularSemaforo(socio.ultimo_pago);
   const modal = document.createElement('div');
   modal.className = 'modal-overlay';
   modal.innerHTML = `
@@ -2452,10 +2457,12 @@ function renderAccesoHuella(container) {
       semDetail.textContent = '';
       return;
     }
-    const sem = calcularSemaforo(socio.ultimo_pago);
+    const cuotasAcc = appData.cuotas || [];
+    const fechaUlt = getFechaUltimoPagoEfectivo(socio, cuotasAcc) || socio.ultimo_pago;
+    const sem = calcularSemaforo(fechaUlt);
     semGrande.className = `semaforo-grande ${sem.estado === 'activo' ? 'verde' : sem.estado === 'por-vencer' ? 'amarillo' : 'rojo'}`;
     semTexto.textContent = sem.estado === 'activo' ? 'AL DÍA' : sem.estado === 'por-vencer' ? 'POR VENCER' : 'VENCIDO';
-    semDetail.textContent = `${socio.nombre} - ${socio.actividad} | Último pago: ${formatDate(socio.ultimo_pago)}`;
+    semDetail.textContent = `${socio.nombre} - ${socio.actividad} | Último pago: ${formatDate(fechaUlt)}`;
   }
 
   input.addEventListener('input', () => {
@@ -2509,8 +2516,10 @@ function renderAccesoHuella(container) {
 // --- MÉTRICAS ---
 function renderMetricas(container, opts = {}) {
   const periodo = getPeriodoActual(appData);
+  const cuotasMet = appData.cuotas || [];
   const socios = ordenarSociosCopia(appData.socios).filter(s => {
-    const sem = calcularSemaforo(s.ultimo_pago);
+    const fechaRef = getFechaUltimoPagoEfectivo(s, cuotasMet) || s.ultimo_pago;
+    const sem = calcularSemaforo(fechaRef);
     return sem.estado === 'activo' || sem.estado === 'por-vencer';
   });
   const porActividad = {};

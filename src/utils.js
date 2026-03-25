@@ -124,8 +124,34 @@ export function calcularSemaforo(ultimoPagoStr) {
 /** Más de estos días sin pago → listado "Inactivos" (no se borra el socio). */
 export const DIAS_INACTIVO_LISTADO = 60;
 
+function normNombreListado(n) {
+  return String(n || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+/**
+ * Fecha YYYY-MM-DD del último pago: el más reciente entre la ficha del socio y las cuotas con el mismo nombre.
+ * Evita marcar como inactivo a quien tiene pagos en cuotas pero `ultimo_pago` desactualizado.
+ */
+export function getFechaUltimoPagoEfectivo(socio, cuotas) {
+  let max = '';
+  const fromSocio = (socio?.ultimo_pago || '').slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(fromSocio)) max = fromSocio;
+  const nombreSocio = normNombreListado(socio?.nombre);
+  if (!nombreSocio) return max;
+  for (const c of cuotas || []) {
+    if (normNombreListado(c.nombre) !== nombreSocio) continue;
+    const f = (c.fecha || '').slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(f) && (!max || f > max)) max = f;
+  }
+  return max;
+}
+
 /**
  * Categoría para listados: activo / por-vencer / vencido (deben renovar) / inactivo-largo (+60 días).
+ * @param {string} ultimoPagoStr Fecha base (mejor pasar resultado de getFechaUltimoPagoEfectivo + fallback ultimo_pago)
  */
 export function getCategoriaSocioListado(ultimoPagoStr) {
   const sem = calcularSemaforo(ultimoPagoStr);
