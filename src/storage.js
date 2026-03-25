@@ -5,7 +5,7 @@
  */
 import { db } from './firebase.js';
 import { getPeriodo15Actual } from './utils.js';
-import { ref, get, set, onValue } from 'firebase/database';
+import { ref, get, set, onValue, runTransaction } from 'firebase/database';
 
 const FIREBASE_PATH = 'gym/data';
 const STORAGE_KEY = 'center-gym-data';
@@ -104,6 +104,179 @@ function normalizeData(data) {
   if (!data.cobros_alquiler) data.cobros_alquiler = [];
   if (!data.gastos) data.gastos = [];
   return data;
+}
+
+/** Aplica el resultado fusionado al objeto appData en memoria (misma referencia). */
+function applyMergedStateToData(target, merged) {
+  if (!target || !merged) return;
+  const m = normalizeData(JSON.parse(JSON.stringify(merged)));
+  if (!m) return;
+  for (const k of Object.keys(target)) {
+    if (!(k in m)) delete target[k];
+  }
+  for (const k of Object.keys(m)) {
+    target[k] = m[k];
+  }
+}
+
+function cuotaKey(c) {
+  if (c?.id) return 'id:' + c.id;
+  const f = (c.fecha || '').slice(0, 10);
+  const n = (c.nombre || '').trim();
+  const p = String(c.periodo || '');
+  const m = c.monto || 0;
+  const t = String(c.tipo || '');
+  const o = (c.observaciones || '').slice(0, 80);
+  return `leg:${f}|${n}|${p}|${m}|${t}|${o}`;
+}
+
+function ventaKey(v) {
+  return `${(v.fecha || '').slice(0, 10)}|${v.periodo}|${v.producto}|${v.cantidad}|${v.precio}|${v.metodo || ''}`;
+}
+
+function gastoKey(g) {
+  return `${(g.fecha || '').slice(0, 10)}|${g.periodo}|${(g.concepto || '').slice(0, 60)}|${g.monto}|${g.categoria || ''}`;
+}
+
+function pagoProfKey(p) {
+  return `${(p.fecha || '').slice(0, 10)}|${p.periodo}|${p.profesor}|${p.monto}|${p.concepto || ''}`;
+}
+
+function cobroAlqKey(c) {
+  return `${(c.fecha || '').slice(0, 10)}|${c.actividad}|${c.monto}|${(c.observaciones || '').slice(0, 40)}`;
+}
+
+function mergeUnionLists(rArr, iArr, keyFn) {
+  const keysIncoming = new Set((iArr || []).map(keyFn));
+  const out = [...(iArr || [])];
+  for (const x of rArr || []) {
+    if (!keysIncoming.has(keyFn(x))) out.push(x);
+  }
+  return out;
+}
+
+/** Misma fila por id: gana la versión con _updatedAt más reciente; si falta, gana lo que acaba de guardar el cliente (incoming). */
+function mergeByIdPreferIncoming(rArr, iArr) {
+  const incMap = new Map();
+  for (const s of iArr || []) {
+    if (s?.id) incMap.set(s.id, s);
+  }
+  const merged = [];
+  for (const s of iArr || []) {
+    if (!s?.id) continue;
+    const rSoc = (rArr || []).find(x => x.id === s.id);
+    if (!rSoc) merged.push({ ...s });
+    else {
+      const ti = s._updatedAt || 0;
+      const tr = rSoc._updatedAt || 0;
+      merged.push(ti >= tr ? { ...rSoc, ...s } : { ...s, ...rSoc });
+    }
+  }
+  for (const s of rArr || []) {
+    if (s?.id && !incMap.has(s.id)) merged.push({ ...s });
+  }
+  return merged;
+}
+
+function mergeActividadesPreferIncoming(rArr, iArr) {
+  const incMap = new Map();
+  for (const s of iArr || []) {
+    if (s?.nombre) incMap.set(s.nombre, s);
+  }
+  const merged = [];
+  for (const s of iArr || []) {
+    if (!s?.nombre) continue;
+    const rSoc = (rArr || []).find(x => x.nombre === s.nombre);
+    if (!rSoc) merged.push({ ...s });
+    else {
+      const ti = s._updatedAt || 0;
+      const tr = rSoc._updatedAt || 0;
+      merged.push(ti >= tr ? { ...rSoc, ...s } : { ...s, ...rSoc });
+    }
+  }
+  for (const s of rArr || []) {
+    if (s?.nombre && !incMap.has(s.nombre)) merged.push({ ...s });
+  }
+  return merged;
+}
+
+function mergeClasesProfesorPreferIncoming(rArr, iArr) {
+  const key = c => `${c.periodo}|${c.profesor_id}`;
+  const incMap = new Map();
+  for (const s of iArr || []) {
+    if (s?.periodo && s?.profesor_id) incMap.set(key(s), s);
+  }
+  const merged = [];
+  for (const s of iArr || []) {
+    if (!s?.periodo || !s?.profesor_id) continue;
+    const rSoc = (rArr || []).find(x => x.periodo === s.periodo && x.profesor_id === s.profesor_id);
+    if (!rSoc) merged.push({ ...s });
+    else {
+      const ti = s._updatedAt || 0;
+      const tr = rSoc._updatedAt || 0;
+      merged.push(ti >= tr ? { ...rSoc, ...s } : { ...s, ...rSoc });
+    }
+  }
+  for (const s of rArr || []) {
+    if (s?.periodo && s?.profesor_id && !incMap.has(key(s))) merged.push({ ...s });
+  }
+  return merged;
+}
+
+function mergeCuotasPreferIncoming(rArr, iArr) {
+  const keysIncoming = new Set((iArr || []).map(cuotaKey));
+  const out = [...(iArr || [])];
+  for (const c of rArr || []) {
+    if (!keysIncoming.has(cuotaKey(c))) out.push(c);
+  }
+  return out;
+}
+
+function mergeStockPreferIncoming(rArr, iArr) {
+  const incMap = new Map();
+  for (const s of iArr || []) {
+    if (s?.producto) incMap.set(s.producto, s);
+  }
+  const merged = [];
+  for (const s of iArr || []) {
+    if (!s?.producto) continue;
+    const rSoc = (rArr || []).find(x => x.producto === s.producto);
+    if (!rSoc) merged.push({ ...s });
+    else {
+      const ti = s._updatedAt || 0;
+      const tr = rSoc._updatedAt || 0;
+      merged.push(ti >= tr ? { ...rSoc, ...s } : { ...s, ...rSoc });
+    }
+  }
+  for (const s of rArr || []) {
+    if (s?.producto && !incMap.has(s.producto)) merged.push({ ...s });
+  }
+  return merged;
+}
+
+/**
+ * Combina la nube (remote) con lo que el cliente quiere guardar (incoming).
+ * Evita que un guardado desde otra PC o pestaña con datos viejos borre socios/cuotas recién cargados en otro lado.
+ */
+function mergeAppDataForSave(remoteRaw, incomingRaw) {
+  const r = normalizeData(JSON.parse(JSON.stringify(remoteRaw || {})));
+  const i = normalizeData(JSON.parse(JSON.stringify(incomingRaw || {})));
+  const out = { ...i };
+  out.socios = mergeByIdPreferIncoming(r.socios, i.socios);
+  out.cuotas = mergeCuotasPreferIncoming(r.cuotas, i.cuotas);
+  out.ventas = mergeUnionLists(r.ventas, i.ventas, ventaKey);
+  out.gastos = mergeUnionLists(r.gastos, i.gastos, gastoKey);
+  out.pagos_profesores = mergeUnionLists(r.pagos_profesores, i.pagos_profesores, pagoProfKey);
+  out.stock = mergeStockPreferIncoming(r.stock, i.stock);
+  out.profesores = mergeByIdPreferIncoming(r.profesores, i.profesores);
+  out.clases_profesor = mergeClasesProfesorPreferIncoming(r.clases_profesor, i.clases_profesor);
+  out.actividades = mergeActividadesPreferIncoming(r.actividades, i.actividades);
+  out.rutinas = mergeByIdPreferIncoming(r.rutinas, i.rutinas);
+  out.horario = mergeByIdPreferIncoming(r.horario, i.horario);
+  out.actividades_alquiler = mergeByIdPreferIncoming(r.actividades_alquiler, i.actividades_alquiler);
+  out.cobros_alquiler = mergeUnionLists(r.cobros_alquiler, i.cobros_alquiler, cobroAlqKey);
+  out.config = { ...(r.config || {}), ...(i.config || {}) };
+  return normalizeData(out);
 }
 
 export async function loadData() {
@@ -243,9 +416,30 @@ export async function saveData(data) {
 
   const dataRef = ref(db, FIREBASE_PATH);
   let lastErr = null;
+
+  async function commitMergedToCloud(merged) {
+    const toWrite = cloneForFirebase(merged);
+    toWrite._lastSavedAt = merged._lastSavedAt;
+    await set(dataRef, toWrite);
+  }
+
   for (let attempt = 0; attempt < SAVE_RETRIES; attempt++) {
     try {
-      await set(dataRef, payload);
+      const txResult = await runTransaction(dataRef, mutableData => {
+        const current =
+          mutableData && typeof mutableData.val === 'function' ? mutableData.val() : mutableData;
+        const remote = normalizeData(current || {});
+        const merged = mergeAppDataForSave(remote, payload);
+        merged._lastSavedAt = Date.now();
+        return merged;
+      });
+      const final = normalizeData(txResult.snapshot.val());
+      if (final) {
+        data._lastSavedAt = final._lastSavedAt;
+        applyMergedStateToData(data, final);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+        localStorage.setItem(STORAGE_TIMESTAMP_KEY, String(final._lastSavedAt || Date.now()));
+      }
       lastCloudWriteOk = true;
       lastCloudWriteAt = Date.now();
       pendingCloudSync = false;
@@ -255,12 +449,40 @@ export async function saveData(data) {
     } catch (e) {
       lastErr = e;
       lastFirebaseWriteError = formatFirebaseError(e);
-      console.warn(`Firebase save intento ${attempt + 1}/${SAVE_RETRIES}:`, e?.code, e?.message);
+      console.warn(`Firebase transaction intento ${attempt + 1}/${SAVE_RETRIES}:`, e?.code, e?.message);
       if (attempt < SAVE_RETRIES - 1) {
         await new Promise(r => setTimeout(r, SAVE_RETRY_BASE_MS * (attempt + 1)));
       }
     }
   }
+
+  for (let attempt = 0; attempt < SAVE_RETRIES; attempt++) {
+    try {
+      const snap = await get(dataRef);
+      const remote = normalizeData(snap.exists() ? snap.val() : {});
+      const merged = mergeAppDataForSave(remote, payload);
+      merged._lastSavedAt = Date.now();
+      await commitMergedToCloud(merged);
+      data._lastSavedAt = merged._lastSavedAt;
+      applyMergedStateToData(data, merged);
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      localStorage.setItem(STORAGE_TIMESTAMP_KEY, String(merged._lastSavedAt));
+      lastCloudWriteOk = true;
+      lastCloudWriteAt = Date.now();
+      pendingCloudSync = false;
+      lastFirebaseWriteError = '';
+      emitSync();
+      return true;
+    } catch (e) {
+      lastErr = e;
+      lastFirebaseWriteError = formatFirebaseError(e);
+      console.warn(`Firebase save (merge+set) intento ${attempt + 1}/${SAVE_RETRIES}:`, e?.code, e?.message);
+      if (attempt < SAVE_RETRIES - 1) {
+        await new Promise(r => setTimeout(r, SAVE_RETRY_BASE_MS * (attempt + 1)));
+      }
+    }
+  }
+
   lastCloudWriteOk = false;
   pendingCloudSync = true;
   emitSync();

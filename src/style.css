@@ -12,6 +12,7 @@
   --semaforo-verde: #22c55e;
   --semaforo-amarillo: #eab308;
   --semaforo-rojo: #ef4444;
+  --semaforo-gris: #64748b;
   --font-display: 'Oswald', sans-serif;
   --font-body: 'Roboto', sans-serif;
 }
@@ -375,6 +376,11 @@ tr:hover {
   color: var(--semaforo-rojo);
 }
 
+.semaforo.inactivo-largo {
+  background: rgba(100, 116, 139, 0.22);
+  color: var(--semaforo-gris);
+}
+
 .semaforo-dot {
   width: 10px;
   height: 10px;
@@ -385,6 +391,7 @@ tr:hover {
 .semaforo.activo .semaforo-dot { background: var(--semaforo-verde); }
 .semaforo.por-vencer .semaforo-dot { background: var(--semaforo-amarillo); }
 .semaforo.vencido .semaforo-dot { background: var(--semaforo-rojo); }
+.semaforo.inactivo-largo .semaforo-dot { background: var(--semaforo-gris); }
 
 @keyframes pulse {
   0%, 100% { opacity: 1; }

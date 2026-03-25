@@ -5,7 +5,7 @@
 
 import { loadData, saveData, saveToLocalSync, getPeriodoActual, subscribeToDataUpdates, subscribeSyncStatus, pingFirebaseRead, getSyncState } from './storage.js';
 import * as fingerprint from './fingerprint.js';
-import { calcularSemaforo, formatMoney, formatDate, getRangoPeriodo15, fechaEnPeriodo15, diasDesdePago, diasRestantes, getPeriodoDesdeFecha, getPeriodoAnterior, calcularEdad, listarCumpleanosHoyYManana } from './utils.js';
+import { calcularSemaforo, formatMoney, formatDate, getRangoPeriodo15, fechaEnPeriodo15, diasDesdePago, diasRestantes, getPeriodoDesdeFecha, getPeriodoAnterior, calcularEdad, listarCumpleanosHoyYManana, getCategoriaSocioListado, DIAS_INACTIVO_LISTADO } from './utils.js';
 import { isAdminAutenticado, setAdminAutenticado, verificarClave, filtrarPorPeriodo15, filtrarCuotasPorPeriodoResumen, getPeriodosDisponibles } from './finanzas.js';
 
 let appData = null;
@@ -318,16 +318,19 @@ function renderDashboard(container) {
   const socios = ordenarSociosCopia(appData.socios);
   socios.forEach(s => {
     s._semaforo = calcularSemaforo(s.ultimo_pago);
+    s._catListado = getCategoriaSocioListado(s.ultimo_pago);
   });
 
-  const activosList = socios.filter(s => s._semaforo.estado === 'activo');
-  const porVencerList = socios.filter(s => s._semaforo.estado === 'por-vencer');
-  const vencidosList = socios.filter(s => s._semaforo.estado === 'vencido');
+  const activosList = socios.filter(s => s._catListado === 'activo');
+  const porVencerList = socios.filter(s => s._catListado === 'por-vencer');
+  const vencidosList = socios.filter(s => s._catListado === 'vencido');
+  const inactivosList = socios.filter(s => s._catListado === 'inactivo-largo');
 
   container.innerHTML = `
     <div class="card">
       <h2 class="card-title">Dashboard - Período ${periodo}</h2>
       ${htmlCumpleanosAlerta(appData.socios)}
+      <p style="color: var(--text-secondary); font-size: 0.9rem; margin: -0.5rem 0 1rem;">Vencidos: llevan entre ~31 y ${DIAS_INACTIVO_LISTADO} días sin renovar. Inactivos: más de ${DIAS_INACTIVO_LISTADO} días sin pago (siguen en Socios; no se borran).</p>
       <div class="stats-grid">
         <div class="stat-card stat-card-clickable" data-filter="activo" title="Clic para ver listado">
           <div class="stat-value">${activosList.length}</div>
@@ -339,7 +342,11 @@ function renderDashboard(container) {
         </div>
         <div class="stat-card stat-card-clickable" data-filter="vencido" title="Clic para ver listado">
           <div class="stat-value">${vencidosList.length}</div>
-          <div class="stat-label">Vencidos</div>
+          <div class="stat-label">Vencidos (a renovar)</div>
+        </div>
+        <div class="stat-card stat-card-clickable" data-filter="inactivo-largo" title="Clic para ver listado">
+          <div class="stat-value">${inactivosList.length}</div>
+          <div class="stat-label">Inactivos (+${DIAS_INACTIVO_LISTADO} días)</div>
         </div>
       </div>
       <div id="dashboard-listado" class="dashboard-listado" style="display: none; margin-top: 1.5rem; padding-top: 1.5rem; border-top: 1px solid var(--border);">
@@ -368,7 +375,8 @@ function renderDashboard(container) {
   const listados = {
     activo: { titulo: 'Socios al día', lista: activosList },
     'por-vencer': { titulo: 'Vencen en 7 días', lista: porVencerList },
-    vencido: { titulo: 'Socios vencidos', lista: vencidosList }
+    vencido: { titulo: 'Vencidos — conviene contactar para renovar', lista: vencidosList },
+    'inactivo-largo': { titulo: `Inactivos (más de ${DIAS_INACTIVO_LISTADO} días sin pago)`, lista: inactivosList }
   };
 
   const panelListado = container.querySelector('#dashboard-listado');
@@ -426,6 +434,7 @@ function renderSocios(container) {
   socios.forEach(s => {
     const sem = calcularSemaforo(s.ultimo_pago);
     s._semaforo = sem;
+    s._catListado = getCategoriaSocioListado(s.ultimo_pago);
   });
 
   const actividades = appData.actividades || [];
@@ -546,9 +555,16 @@ function renderSocios(container) {
   function renderRows(list) {
     tbody.innerHTML = list.map(s => {
       const edad = calcularEdad(s.fecha_nacimiento);
+      const cat = s._catListado || getCategoriaSocioListado(s.ultimo_pago);
+      const semLabel =
+        cat === 'activo' ? 'Al día'
+          : cat === 'por-vencer' ? `Vence en ${s._semaforo.dias}d`
+            : cat === 'inactivo-largo' ? `Inactivo +${DIAS_INACTIVO_LISTADO}d`
+              : 'Vencido';
+      const semClase = cat === 'inactivo-largo' ? 'inactivo-largo' : s._semaforo.clase;
       return `
       <tr>
-        <td><span class="semaforo ${s._semaforo.clase}"><span class="semaforo-dot"></span>${s._semaforo.estado === 'activo' ? 'Al día' : s._semaforo.estado === 'por-vencer' ? `Vence en ${s._semaforo.dias}d` : 'Vencido'}</span></td>
+        <td><span class="semaforo ${semClase}"><span class="semaforo-dot"></span>${semLabel}</span></td>
         <td>${s.nombre}</td>
         <td>${s.telefono || '-'}</td>
         <td>${edad !== null ? edad + ' años' : '-'}</td>
@@ -609,6 +625,7 @@ function leerFormSocio(periodo) {
   const hoy = new Date().toISOString().slice(0, 10);
   return {
     id: String(Date.now()),
+    _updatedAt: Date.now(),
     nombre: document.getElementById('socio-nombre').value.trim(),
     dni: (document.getElementById('socio-dni')?.value || '').trim(),
     fecha_nacimiento: (document.getElementById('socio-fecha-nacimiento')?.value || '').trim() || undefined,
@@ -763,6 +780,7 @@ function abrirModalEditarSocio(socio) {
     socio.huella_id = (hid >= 0 && hid <= 999) ? hid : undefined;
     socio.monto = parseInt(form.monto.value, 10) || 0;
     socio.observaciones = form.observaciones.value.trim();
+    socio._updatedAt = Date.now();
     ordenarSociosAlfabeticamente();
     saveData(appData);
     modal.remove();
@@ -1177,6 +1195,7 @@ function renderCuotas(container) {
     socio.ultimo_periodo = periodoReal;
     socio.monto = monto;
     socio.metodo_pago = metodo;
+    socio._updatedAt = Date.now();
     const okCloud = await saveData(appData);
     if (!okCloud) {
       mostrarToast('Pago guardado en este equipo. No se pudo subir a Firebase: revisá red o reglas; otras PCs no lo verán hasta que sincronice.');
@@ -1287,6 +1306,7 @@ function renderVentas(container) {
     const hoy = new Date().toISOString().slice(0, 10);
     appData.ventas.push({ fecha: hoy, periodo, producto, cantidad, precio, metodo });
     if (!esServicio) item.stock_actual = (item.stock_actual ?? item.stock_inicial ?? 0) - cantidad;
+    item._updatedAt = Date.now();
     saveData(appData);
     renderPage('ventas');
   });
@@ -1447,7 +1467,8 @@ function renderStock(container) {
       categoria: cat,
       precio,
       stock_inicial: stockIni,
-      stock_actual: stockIni
+      stock_actual: stockIni,
+      _updatedAt: Date.now()
     });
     saveData(appData);
     document.getElementById('form-nuevo-producto').reset();
@@ -1461,6 +1482,7 @@ function renderStock(container) {
     const item = stock.find(s => s.producto === producto);
     if (item) {
       item.stock_actual = (item.stock_actual ?? item.stock_inicial ?? 0) + cantidad;
+      item._updatedAt = Date.now();
       saveData(appData);
       renderPage('stock');
     }
@@ -1522,6 +1544,7 @@ function abrirModalEditarStock(item) {
     item.categoria = modal.querySelector('#edit-stock-categoria').value;
     item.precio = parseInt(modal.querySelector('#edit-stock-precio').value, 10) || 0;
     item.stock_actual = parseInt(modal.querySelector('#edit-stock-actual').value, 10) || 0;
+    item._updatedAt = Date.now();
     saveData(appData);
     modal.remove();
     renderPage('stock');
@@ -1733,6 +1756,7 @@ function renderProfesores(container, opts = {}) {
         p.actividad = actividad;
         p.tipo_pago = tipo_pago;
         p.valor = valor;
+        p._updatedAt = Date.now();
         if (tipo_pago === 'fijo_mas_porcentaje') p.valor_porcentaje = valor_porcentaje;
         else delete p.valor_porcentaje;
       }
@@ -1740,7 +1764,7 @@ function renderProfesores(container, opts = {}) {
       document.querySelector('#form-profesor button[type="submit"]').textContent = 'Agregar';
       document.getElementById('form-profesor').reset();
     } else {
-      const nuevo = { id: 'prof' + Date.now(), nombre, actividad, tipo_pago, valor, observacion: '' };
+      const nuevo = { id: 'prof' + Date.now(), nombre, actividad, tipo_pago, valor, observacion: '', _updatedAt: Date.now() };
       if (tipo_pago === 'fijo_mas_porcentaje') nuevo.valor_porcentaje = valor_porcentaje;
       appData.profesores.push(nuevo);
     }
@@ -1780,8 +1804,12 @@ function renderProfesores(container, opts = {}) {
     if (!profesorId || cantidad <= 0) return;
     if (!appData.clases_profesor) appData.clases_profesor = [];
     const existente = appData.clases_profesor.findIndex(c => c.periodo === periodo && c.profesor_id === profesorId);
-    if (existente >= 0) appData.clases_profesor[existente].cantidad = cantidad;
-    else appData.clases_profesor.push({ periodo, profesor_id: profesorId, cantidad });
+    if (existente >= 0) {
+      appData.clases_profesor[existente].cantidad = cantidad;
+      appData.clases_profesor[existente]._updatedAt = Date.now();
+    } else {
+      appData.clases_profesor.push({ periodo, profesor_id: profesorId, cantidad, _updatedAt: Date.now() });
+    }
     saveData(appData);
     refresh();
   });
@@ -2119,7 +2147,8 @@ function renderActividades(container) {
       profesor: document.getElementById('act-profesor').value || '',
       porcentaje_profesor: (parseFloat(document.getElementById('act-porcentaje').value) || 0) / 100,
       aplica_pago: document.getElementById('act-pago').value || 'No',
-      observacion: document.getElementById('act-obs').value || ''
+      observacion: document.getElementById('act-obs').value || '',
+      _updatedAt: Date.now()
     };
     if (editingNombre) {
       const idx = appData.actividades.findIndex(a => a.nombre === editingNombre);
@@ -2290,7 +2319,7 @@ function renderHorarios(container) {
     const nom = inputNueva?.value?.trim();
     if (!nom) return;
     if (!appData.actividades.some(a => a.nombre === nom)) {
-      appData.actividades.push({ nombre: nom, profesor: '', porcentaje_profesor: 0, observacion: '', aplica_pago: 'No' });
+      appData.actividades.push({ nombre: nom, profesor: '', porcentaje_profesor: 0, observacion: '', aplica_pago: 'No', _updatedAt: Date.now() });
       saveData(appData);
       renderPage('horarios');
     }
@@ -2339,13 +2368,15 @@ function renderHorarios(container) {
       if (existing) {
         existing.actividad = actividad;
         existing.cupo = cupo;
+        existing._updatedAt = Date.now();
       } else {
         appData.horario.push({
           id: 'hor' + Date.now(),
           dia,
           hora,
           actividad,
-          cupo
+          cupo,
+          _updatedAt: Date.now()
         });
       }
       saveData(appData);
@@ -2902,6 +2933,7 @@ function renderUnificar(container) {
         socioKeep.email = socioKeep.email || socioRemove.email;
         socioKeep.direccion = socioKeep.direccion || socioRemove.direccion;
       }
+      socioKeep._updatedAt = Date.now();
       saveData(appData);
       mostrarToast('Socios unificados correctamente');
       renderPage('admin');

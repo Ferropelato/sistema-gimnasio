@@ -121,6 +121,20 @@ export function calcularSemaforo(ultimoPagoStr) {
   return { estado: 'activo', clase: 'activo', dias: rest };
 }
 
+/** Más de estos días sin pago → listado "Inactivos" (no se borra el socio). */
+export const DIAS_INACTIVO_LISTADO = 60;
+
+/**
+ * Categoría para listados: activo / por-vencer / vencido (deben renovar) / inactivo-largo (+60 días).
+ */
+export function getCategoriaSocioListado(ultimoPagoStr) {
+  const sem = calcularSemaforo(ultimoPagoStr);
+  if (sem.estado === 'activo' || sem.estado === 'por-vencer') return sem.estado;
+  const dias = diasDesdePago(ultimoPagoStr);
+  if (dias === null || dias > DIAS_INACTIVO_LISTADO) return 'inactivo-largo';
+  return 'vencido';
+}
+
 export function formatMoney(n) {
   return new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS' }).format(n || 0);
 }
