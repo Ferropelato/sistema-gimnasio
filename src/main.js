@@ -6,7 +6,7 @@
 import { loadData, saveData, saveToLocalSync, getPeriodoActual, subscribeToDataUpdates, subscribeSyncStatus, pingFirebaseRead, getSyncState } from './storage.js';
 import * as fingerprint from './fingerprint.js';
 import { calcularSemaforo, formatMoney, formatDate, getRangoPeriodo15, fechaEnPeriodo15, diasDesdePago, diasRestantes, getPeriodoDesdeFecha, getPeriodoAnterior, calcularEdad, listarCumpleanosHoyYManana, getCategoriaSocioListado, getFechaUltimoPagoEfectivo, DIAS_INACTIVO_LISTADO } from './utils.js';
-import { isAdminAutenticado, setAdminAutenticado, verificarClave, filtrarPorPeriodo15, filtrarCuotasPorPeriodoResumen, getPeriodosDisponibles } from './finanzas.js';
+import { isAdminAutenticado, setAdminAutenticado, refreshAuthFromServer, loginWithServer, filtrarPorPeriodo15, filtrarCuotasPorPeriodoResumen, getPeriodosDisponibles } from './finanzas.js';
 
 let appData = null;
 let adminSubPage = 'profesores';
@@ -64,6 +64,7 @@ function actualizarFechaHeader() {
 async function init() {
   subscribeSyncStatus(updateSyncBar);
   appData = await loadData();
+  await refreshAuthFromServer();
   actualizarFechaHeader();
   setInterval(actualizarFechaHeader, 60000);
   renderPage('dashboard');
@@ -2562,15 +2563,14 @@ function renderAdmin(container) {
         </form>
       </div>
     `;
-    container.querySelector('#form-admin-login').onsubmit = (e) => {
+    container.querySelector('#form-admin-login').onsubmit = async (e) => {
       e.preventDefault();
       const clave = document.getElementById('admin-clave').value;
-      if (verificarClave(clave, appData?.config)) {
-        setAdminAutenticado(true);
-        renderPage('admin');
-      } else {
+      if (!(await loginWithServer(clave, appData?.config))) {
         mostrarToast('Contraseña incorrecta');
+        return;
       }
+      renderPage('admin');
     };
     return;
   }
@@ -2599,8 +2599,8 @@ function renderAdmin(container) {
     <div id="admin-content"></div>
   `;
 
-  document.getElementById('cerrar-admin').onclick = () => {
-    setAdminAutenticado(false);
+  document.getElementById('cerrar-admin').onclick = async () => {
+    await setAdminAutenticado(false);
     renderPage('admin');
   };
 
@@ -3310,8 +3310,8 @@ function renderFinanzas(container, opts = {}) {
     </div>
   `;
 
-  document.getElementById('cerrar-finanzas')?.addEventListener('click', () => {
-    setAdminAutenticado(false);
+  document.getElementById('cerrar-finanzas')?.addEventListener('click', async () => {
+    await setAdminAutenticado(false);
     renderPage(isAdmin ? 'admin' : 'finanzas');
   });
 

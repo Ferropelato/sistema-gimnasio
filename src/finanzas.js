@@ -1,27 +1,80 @@
 /**
  * Módulo Finanzas - Center Gym
- * Acceso restringido con contraseña
+ * Sesión admin: cookie httpOnly vía /api/auth (Express) + respaldo sessionStorage si no hay API
  */
 
 import { getRangoPeriodo15, fechaEnPeriodo15, formatMoney, formatDate } from './utils.js';
 
 const ADMIN_KEY = 'center-gym-admin-auth';
 
+/** Estado en memoria sincronizado con cookie (o fallback). */
+let adminAuthCached = false;
+
 export function isAdminAutenticado() {
-  return sessionStorage.getItem(ADMIN_KEY) === '1';
+  return adminAuthCached;
 }
 
-export function setAdminAutenticado(val) {
-  if (val) sessionStorage.setItem(ADMIN_KEY, '1');
-  else sessionStorage.removeItem(ADMIN_KEY);
+/**
+ * Sincroniza sesión con el servidor (cookie). Si falla la API, usa sessionStorage legacy.
+ */
+export async function refreshAuthFromServer() {
+  try {
+    const r = await fetch('/api/auth/me', { credentials: 'include' });
+    if (r.ok) {
+      const d = await r.json();
+      adminAuthCached = !!d.ok;
+      if (adminAuthCached) sessionStorage.removeItem(ADMIN_KEY);
+      return;
+    }
+  } catch {
+    // sin servidor / offline
+  }
+  adminAuthCached = sessionStorage.getItem(ADMIN_KEY) === '1';
+}
+
+/**
+ * Login: intenta cookie firmada; si no hay API disponible, mantiene comportamiento anterior.
+ */
+export async function loginWithServer(password, config) {
+  if (!verificarClave(password, config)) return false;
+  try {
+    const r = await fetch('/api/auth/login', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ password })
+    });
+    if (r.ok) {
+      adminAuthCached = true;
+      sessionStorage.removeItem(ADMIN_KEY);
+      return true;
+    }
+  } catch {
+    // continuar con fallback
+  }
+  adminAuthCached = true;
+  sessionStorage.setItem(ADMIN_KEY, '1');
+  return true;
+}
+
+export async function setAdminAutenticado(val) {
+  adminAuthCached = !!val;
+  if (!val) {
+    sessionStorage.removeItem(ADMIN_KEY);
+    try {
+      await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+    } catch {
+      /* sin API */
+    }
+  }
 }
 
 export function isFinanzasAutenticado() {
   return isAdminAutenticado();
 }
 
-export function setFinanzasAutenticado(val) {
-  setAdminAutenticado(val);
+export async function setFinanzasAutenticado(val) {
+  await setAdminAutenticado(val);
 }
 
 export function verificarClave(clave, config) {
