@@ -3,13 +3,18 @@
  * Punto de entrada principal
  */
 
-import { loadData, saveData, saveToLocalSync, getPeriodoActual, subscribeToDataUpdates, subscribeSyncStatus, pingFirebaseRead, getSyncState } from './storage.js';
+import { loadData, saveData, saveToLocalSync, getPeriodoActual, subscribeToDataUpdates, subscribeSyncStatus, pingFirebaseRead, getSyncState, appendAuditLog } from './storage.js';
+import { getAuthActor } from './auth.js';
+import { auth } from './firebase.js';
+import { onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, signInWithEmailAndPassword } from 'firebase/auth';
 import * as fingerprint from './fingerprint.js';
 import { calcularSemaforo, formatMoney, formatDate, getRangoPeriodo15, fechaEnPeriodo15, diasDesdePago, diasRestantes, getPeriodoDesdeFecha, getPeriodoAnterior, calcularEdad, listarCumpleanosHoyYManana, getCategoriaSocioListado, getFechaUltimoPagoEfectivo, DIAS_INACTIVO_LISTADO } from './utils.js';
 import { isAdminAutenticado, setAdminAutenticado, refreshAuthFromServer, loginWithServer, filtrarPorPeriodo15, filtrarCuotasPorPeriodoResumen, getPeriodosDisponibles } from './finanzas.js';
 
 let appData = null;
 let adminSubPage = 'profesores';
+/** Listado Socios: incluir filas dadas de baja */
+let sociosIncluirBajas = false;
 
 /** Copia de socios ordenada alfabéticamente por nombre */
 function ordenarSociosCopia(socios) {
@@ -24,6 +29,11 @@ function ordenarSociosAlfabeticamente() {
   appData.socios.sort((a, b) =>
     (a.nombre || '').localeCompare(b.nombre || '', 'es', { sensitivity: 'base' })
   );
+}
+
+/** Socios que siguen en gestión (excluye dados de baja lógica). Sin `activo` = activo. */
+function sociosActivos(socios) {
+  return (socios || []).filter(s => s.activo !== false);
 }
 
 function htmlCumpleanosAlerta(sociosFuente) {
@@ -61,13 +71,13 @@ function actualizarFechaHeader() {
   }
 }
 
-async function init() {
+let appListenersRegistered = false;
+
+function registerAppListeners() {
+  if (appListenersRegistered) return;
+  appListenersRegistered = true;
+
   subscribeSyncStatus(updateSyncBar);
-  appData = await loadData();
-  await refreshAuthFromServer();
-  actualizarFechaHeader();
-  setInterval(actualizarFechaHeader, 60000);
-  renderPage('dashboard');
 
   document.getElementById('sync-bar')?.addEventListener('click', async e => {
     const btn = e.target.closest('.sync-retry-btn');
@@ -147,6 +157,11 @@ async function init() {
       const data = JSON.parse(text);
       if (!data.socios || !Array.isArray(data.socios)) throw new Error('Archivo inválido');
       appData = data;
+      appendAuditLog(appData, {
+        accion: 'importar_backup',
+        detalle: file.name,
+        actor: getAuthActor()
+      });
       const okImp = await saveData(appData);
       mostrarToast(
         okImp ? 'Datos restaurados y subidos a la nube.' : 'Importado en este equipo; no se pudo subir a Firebase — usá “Subir / reconectar”.'
@@ -197,6 +212,17 @@ async function init() {
   ['keydown', 'pointerdown', 'input', 'scroll', 'touchstart'].forEach(ev => {
     document.addEventListener(ev, reiniciarTimerInactividad, { passive: true });
   });
+}
+
+async function startApp() {
+  registerAppListeners();
+  appData = await loadData();
+  await refreshAuthFromServer();
+  actualizarFechaHeader();
+  if (!window.__centerGymFechaInterval) {
+    window.__centerGymFechaInterval = setInterval(actualizarFechaHeader, 60000);
+  }
+  renderPage('dashboard');
 }
 
 function mostrarToast(mensaje, duracionMs = 2500) {
@@ -317,7 +343,7 @@ function renderPage(page) {
 function renderDashboard(container) {
   const periodo = getPeriodoActual(appData);
   const cuotas = appData.cuotas || [];
-  const socios = ordenarSociosCopia(appData.socios);
+  const socios = ordenarSociosCopia(sociosActivos(appData.socios));
   socios.forEach(s => {
     s._fechaUltimoPagoEfectivo = getFechaUltimoPagoEfectivo(s, cuotas);
     const fechaRef = s._fechaUltimoPagoEfectivo || s.ultimo_pago;
@@ -333,7 +359,7 @@ function renderDashboard(container) {
   container.innerHTML = `
     <div class="card">
       <h2 class="card-title">Dashboard - Período ${periodo}</h2>
-      ${htmlCumpleanosAlerta(appData.socios)}
+      ${htmlCumpleanosAlerta(sociosActivos(appData.socios))}
       <p style="color: var(--text-secondary); font-size: 0.9rem; margin: -0.5rem 0 1rem;">Vencidos: llevan entre ~31 y ${DIAS_INACTIVO_LISTADO} días sin renovar. Inactivos: más de ${DIAS_INACTIVO_LISTADO} días sin pago (siguen en Socios; no se borran).</p>
       <div class="stats-grid">
         <div class="stat-card stat-card-clickable" data-filter="activo" title="Clic para ver listado">
@@ -415,7 +441,7 @@ function renderDashboard(container) {
     card.addEventListener('click', () => mostrarListado(card.dataset.filter));
   });
 
-  const { hoy: toastHoy, manana: toastManana } = listarCumpleanosHoyYManana(appData.socios);
+  const { hoy: toastHoy, manana: toastManana } = listarCumpleanosHoyYManana(sociosActivos(appData.socios));
   if (toastHoy.length || toastManana.length) {
     const hoyStr = new Date().toISOString().slice(0, 10);
     const key = `cumple-toast-${hoyStr}`;
@@ -435,18 +461,19 @@ function renderDashboard(container) {
 function renderSocios(container) {
   const periodo = getPeriodoActual(appData);
   const cuotas = appData.cuotas || [];
-  const socios = ordenarSociosCopia(appData.socios);
-  socios.forEach(s => {
+  const todosSocios = ordenarSociosCopia(appData.socios);
+  todosSocios.forEach(s => {
     s._fechaUltimoPagoEfectivo = getFechaUltimoPagoEfectivo(s, cuotas);
     const fechaRef = s._fechaUltimoPagoEfectivo || s.ultimo_pago;
     s._semaforo = calcularSemaforo(fechaRef);
     s._catListado = getCategoriaSocioListado(fechaRef);
   });
 
+  const listaSocios = sociosIncluirBajas ? todosSocios : sociosActivos(todosSocios);
   const actividades = appData.actividades || [];
 
   let html = `
-    ${htmlCumpleanosAlerta(appData.socios)}
+    ${htmlCumpleanosAlerta(sociosActivos(appData.socios))}
     <div class="card">
       <h2 class="card-title">Agregar nuevo socio (ficha completa)</h2>
       <form id="form-socio" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1rem;">
@@ -508,9 +535,15 @@ function renderSocios(container) {
     </div>
     <div class="card">
       <h2 class="card-title">Socios</h2>
-      ${socios.filter(s => !s.planilla_deslinde || !s.planilla_medica).length ? `
+      <p style="margin-bottom: 0.75rem;">
+        <label style="cursor: pointer; color: var(--text-secondary);">
+          <input type="checkbox" id="socios-incluir-bajas" ${sociosIncluirBajas ? 'checked' : ''} />
+          Mostrar dados de baja
+        </label>
+      </p>
+      ${listaSocios.filter(s => !s.planilla_deslinde || !s.planilla_medica).length ? `
         <div class="aviso-planillas" style="background: rgba(234,179,8,0.2); border: 1px solid var(--semaforo-amarillo); border-radius: 6px; padding: 0.75rem; margin-bottom: 1rem;">
-          ⚠ ${socios.filter(s => !s.planilla_deslinde || !s.planilla_medica).length} socio(s) sin planilla de deslinde y/o médica completa. Recordar solicitarlas.
+          ⚠ ${listaSocios.filter(s => !s.planilla_deslinde || !s.planilla_medica).length} socio(s) sin planilla de deslinde y/o médica completa. Recordar solicitarlas.
         </div>
       ` : ''}
       <div class="search-box">
@@ -569,10 +602,11 @@ function renderSocios(container) {
             : cat === 'inactivo-largo' ? `Inactivo +${DIAS_INACTIVO_LISTADO}d`
               : 'Vencido';
       const semClase = cat === 'inactivo-largo' ? 'inactivo-largo' : s._semaforo.clase;
+      const bajaBadge = s.activo === false ? '<span style="color:var(--text-secondary);font-size:0.75rem"> (baja)</span>' : '';
       return `
       <tr>
         <td><span class="semaforo ${semClase}"><span class="semaforo-dot"></span>${semLabel}</span></td>
-        <td>${s.nombre}</td>
+        <td>${s.nombre}${bajaBadge}</td>
         <td>${s.telefono || '-'}</td>
         <td>${edad !== null ? edad + ' años' : '-'}</td>
         <td>${s.actividad || '-'}</td>
@@ -584,6 +618,9 @@ function renderSocios(container) {
           <button type="button" class="btn btn-secondary btn-sm" data-editar="${s.id}" title="Editar ficha">✏️</button>
           <button type="button" class="btn btn-secondary btn-sm" data-huella="${s.id}" title="Registrar huella">👆</button>
           ${(s.telefono || '').replace(/\D/g, '').length >= 10 ? `<a href="${urlWhatsApp(s)}" target="_blank" class="btn btn-secondary btn-sm" title="Enviar WhatsApp">📱</a>` : ''}
+          ${s.activo === false
+            ? `<button type="button" class="btn btn-secondary btn-sm" data-reactivar-socio="${s.id}" title="Volver a activar">↩️</button>`
+            : `<button type="button" class="btn btn-secondary btn-sm" data-baja-socio="${s.id}" title="Dar de baja (no borra historial)" style="color:var(--semaforo-rojo)">🚫</button>`}
         </td>
       </tr>
     `;
@@ -593,14 +630,46 @@ function renderSocios(container) {
       if (btnEditar) btnEditar.addEventListener('click', () => abrirModalEditarSocio(s));
       const btnHuella = tbody.querySelector(`[data-huella="${s.id}"]`);
       if (btnHuella) btnHuella.addEventListener('click', () => abrirModalRegistrarHuella(s));
+      const btnBaja = tbody.querySelector(`[data-baja-socio="${s.id}"]`);
+      if (btnBaja) {
+        btnBaja.addEventListener('click', () => {
+          if (!confirm(`¿Dar de baja a ${s.nombre}?\nSeguirá en la base como inactivo; los pagos no se borran.`)) return;
+          const socio = appData.socios.find(x => x.id === s.id);
+          if (!socio) return;
+          socio.activo = false;
+          socio._bajaAt = Date.now();
+          socio._updatedAt = Date.now();
+          appendAuditLog(appData, { accion: 'socio_baja', detalle: socio.nombre, actor: getAuthActor() });
+          saveData(appData);
+          renderPage('socios');
+        });
+      }
+      const btnReactivar = tbody.querySelector(`[data-reactivar-socio="${s.id}"]`);
+      if (btnReactivar) {
+        btnReactivar.addEventListener('click', () => {
+          const socio = appData.socios.find(x => x.id === s.id);
+          if (!socio) return;
+          socio.activo = true;
+          delete socio._bajaAt;
+          socio._updatedAt = Date.now();
+          appendAuditLog(appData, { accion: 'socio_reactivar', detalle: socio.nombre, actor: getAuthActor() });
+          saveData(appData);
+          renderPage('socios');
+        });
+      }
     });
   }
 
-  renderRows(socios);
+  renderRows(listaSocios);
+
+  document.getElementById('socios-incluir-bajas')?.addEventListener('change', (e) => {
+    sociosIncluirBajas = !!e.target.checked;
+    renderPage('socios');
+  });
 
   searchInput.addEventListener('input', () => {
     const q = searchInput.value.toLowerCase().trim();
-    const filtered = socios.filter(s =>
+    const filtered = listaSocios.filter(s =>
       (s.nombre || '').toLowerCase().includes(q) ||
       (s.dni || '').toString().includes(q) ||
       (s.telefono || '').replace(/\D/g, '').includes(q.replace(/\D/g, ''))
@@ -613,10 +682,13 @@ function renderSocios(container) {
     const nuevoSocio = leerFormSocio(periodo);
     appData.socios.push(nuevoSocio);
     ordenarSociosAlfabeticamente();
+    const cuotaAltaId = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `c${Date.now()}`;
     appData.cuotas.push({
+      id: cuotaAltaId,
       fecha: nuevoSocio.fecha_alta,
       periodo,
       nombre: nuevoSocio.nombre,
+      socio_id: nuevoSocio.id,
       actividad: nuevoSocio.actividad,
       monto: nuevoSocio.monto,
       metodo: nuevoSocio.metodo_pago,
@@ -632,6 +704,7 @@ function leerFormSocio(periodo) {
   const hoy = new Date().toISOString().slice(0, 10);
   return {
     id: String(Date.now()),
+    activo: true,
     _updatedAt: Date.now(),
     nombre: document.getElementById('socio-nombre').value.trim(),
     dni: (document.getElementById('socio-dni')?.value || '').trim(),
@@ -877,7 +950,7 @@ function renderCuotas(container) {
   const periodo = getPeriodoActual(appData);
   const diaFin = appData?.config?.periodo_dia_fin ?? 14;
   const { inicio, fin } = getRangoPeriodo15(periodo, diaFin);
-  const socios = ordenarSociosCopia(appData.socios);
+  const socios = ordenarSociosCopia(sociosActivos(appData.socios));
   const cuotas = filtrarCuotasPorPeriodoResumen(appData.cuotas || [], periodo, diaFin);
   const actividades = appData.actividades || [];
   const periodosDisponibles = getPeriodosDisponibles(appData.cuotas || [], appData.ventas || []);
@@ -1031,8 +1104,8 @@ function renderCuotas(container) {
                 <td>${c.metodo || '-'}</td>
                 <td>${c.tipo || '-'}</td>
                 <td style="white-space:nowrap">
-                  <button type="button" class="btn btn-secondary btn-sm" data-editar-cuota="${idx}" title="Editar fecha e imputación">✏️</button>
-                  <button type="button" class="btn btn-secondary btn-sm" data-eliminar-cuota="${idx}" title="Eliminar este registro de pago" style="margin-left:4px;color:var(--semaforo-rojo)">🗑️</button>
+                  <button type="button" class="btn btn-secondary btn-sm" data-cuota-id="${c.id || ''}" data-editar-cuota="${idx}" title="Editar fecha e imputación">✏️</button>
+                  <button type="button" class="btn btn-secondary btn-sm" data-cuota-id="${c.id || ''}" data-eliminar-cuota="${idx}" title="Eliminar este registro de pago" style="margin-left:4px;color:var(--semaforo-rojo)">🗑️</button>
                 </td>
               </tr>
             `}).join('')}
@@ -1071,29 +1144,44 @@ function renderCuotas(container) {
           <td>${c.metodo || '-'}</td>
           <td>${c.tipo || '-'}</td>
           <td style="white-space:nowrap">
-            <button type="button" class="btn btn-secondary btn-sm" data-editar-cuota="${idx}" title="Editar fecha e imputación">✏️</button>
-            <button type="button" class="btn btn-secondary btn-sm" data-eliminar-cuota="${idx}" title="Eliminar este registro de pago" style="margin-left:4px;color:var(--semaforo-rojo)">🗑️</button>
+            <button type="button" class="btn btn-secondary btn-sm" data-cuota-id="${c.id || ''}" data-editar-cuota="${idx}" title="Editar fecha e imputación">✏️</button>
+            <button type="button" class="btn btn-secondary btn-sm" data-cuota-id="${c.id || ''}" data-eliminar-cuota="${idx}" title="Eliminar este registro de pago" style="margin-left:4px;color:var(--semaforo-rojo)">🗑️</button>
           </td>
         </tr>
       `;
     }).join('');
   }
 
+  function indiceCuotaPorBoton(btn) {
+    const id = (btn.dataset.cuotaId || '').trim();
+    if (id) {
+      const i = appData.cuotas.findIndex(x => x.id === id);
+      return i;
+    }
+    return parseInt(btn.dataset.editarCuota || btn.dataset.eliminarCuota, 10);
+  }
+
   document.getElementById('cuota-tbody')?.addEventListener('click', async (e) => {
     const editBtn = e.target.closest('[data-editar-cuota]');
     if (editBtn) {
-      const idx = parseInt(editBtn.dataset.editarCuota, 10);
+      const idx = indiceCuotaPorBoton(editBtn);
       if (idx >= 0 && appData.cuotas[idx]) abrirModalEditarFechaCuota(appData.cuotas[idx]);
       return;
     }
     const delBtn = e.target.closest('[data-eliminar-cuota]');
     if (delBtn) {
-      const idx = parseInt(delBtn.dataset.eliminarCuota, 10);
+      const idx = indiceCuotaPorBoton(delBtn);
       const cuota = idx >= 0 ? appData.cuotas[idx] : null;
       if (!cuota) return;
       const msg = `¿Eliminar este pago?\n${cuota.nombre} — ${formatMoney(cuota.monto)} — ${formatDate(cuota.fecha)}`;
       if (!confirm(msg)) return;
+      const elim = appData.cuotas[idx];
       appData.cuotas.splice(idx, 1);
+      appendAuditLog(appData, {
+        accion: 'cuota_eliminar',
+        detalle: `${elim?.nombre || ''} ${formatMoney(elim?.monto)} ${(elim?.fecha || '').slice(0, 10)}`,
+        actor: getAuthActor()
+      });
       const okCloud = await saveData(appData);
       if (!okCloud) {
         mostrarToast('Eliminado en este equipo. No se pudo sincronizar con Firebase.');
@@ -1178,6 +1266,7 @@ function renderCuotas(container) {
       fecha: hoy,
       periodo: periodoReal,
       nombre: socio.nombre,
+      socio_id: socio.id,
       actividad: socio.actividad,
       actividad_pase: actividadPase || null,
       monto,
@@ -2458,6 +2547,12 @@ function renderAccesoHuella(container) {
       semDetail.textContent = '';
       return;
     }
+    if (socio.activo === false) {
+      semGrande.className = 'semaforo-grande rojo';
+      semTexto.textContent = 'DADO DE BAJA';
+      semDetail.textContent = `${socio.nombre} — figura como inactivo en el sistema.`;
+      return;
+    }
     const cuotasAcc = appData.cuotas || [];
     const fechaUlt = getFechaUltimoPagoEfectivo(socio, cuotasAcc) || socio.ultimo_pago;
     const sem = calcularSemaforo(fechaUlt);
@@ -3549,6 +3644,13 @@ function abrirModalEditarGasto(gasto, onGuardar) {
 // --- CONFIG ---
 function renderConfig(container, opts = {}) {
   const config = appData.config || {};
+  const audit = (appData.audit_log || []).slice(-25).reverse();
+  const filasAudit = audit.length
+    ? audit.map(a => {
+        const t = a.at ? new Date(a.at).toLocaleString('es-AR') : '—';
+        return `<tr><td>${t}</td><td>${(a.actor || '').replace(/</g, '&lt;')}</td><td>${(a.accion || '').replace(/</g, '&lt;')}</td><td>${(a.detalle || '').replace(/</g, '&lt;')}</td></tr>`;
+      }).join('')
+    : '<tr><td colspan="4" style="color:var(--text-secondary)">Sin registros aún.</td></tr>';
 
   container.innerHTML = `
     <div class="card">
@@ -3573,6 +3675,16 @@ function renderConfig(container, opts = {}) {
         <button type="submit" class="btn btn-primary">Guardar</button>
       </form>
     </div>
+    <div class="card" style="margin-top: 1rem;">
+      <h3 class="card-title">Auditoría (últimas acciones)</h3>
+      <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 0.75rem;">Bajas de socios, eliminación de pagos e importaciones de backup.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Fecha</th><th>Usuario</th><th>Acción</th><th>Detalle</th></tr></thead>
+          <tbody>${filasAudit}</tbody>
+        </table>
+      </div>
+    </div>
   `;
 
   document.getElementById('form-config').addEventListener('submit', (e) => {
@@ -3587,5 +3699,44 @@ function renderConfig(container, opts = {}) {
   });
 }
 
-// Iniciar
-init();
+setPersistence(auth, browserLocalPersistence).catch(() => {});
+
+document.getElementById('form-auth-login')?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errEl = document.getElementById('auth-error');
+  if (errEl) errEl.textContent = '';
+  const email = document.getElementById('auth-email')?.value?.trim();
+  const password = document.getElementById('auth-password')?.value;
+  try {
+    await signInWithEmailAndPassword(auth, email, password);
+  } catch (err) {
+    const code = err?.code || '';
+    if (errEl) {
+      errEl.textContent =
+        code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found'
+          ? 'Email o contraseña incorrectos.'
+          : (err.message || 'Error al iniciar sesión');
+    }
+  }
+});
+
+document.getElementById('btn-auth-logout')?.addEventListener('click', async () => {
+  await signOut(auth);
+  location.reload();
+});
+
+let startAppEjecutado = false;
+onAuthStateChanged(auth, async (user) => {
+  const gate = document.getElementById('auth-gate');
+  const appEl = document.getElementById('app');
+  if (!user) {
+    if (gate) gate.hidden = false;
+    if (appEl) appEl.hidden = true;
+    return;
+  }
+  if (gate) gate.hidden = true;
+  if (appEl) appEl.hidden = false;
+  if (startAppEjecutado) return;
+  startAppEjecutado = true;
+  await startApp();
+});

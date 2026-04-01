@@ -32,7 +32,7 @@ function formatFirebaseError(e) {
   const code = e?.code || '';
   const msg = (e?.message || String(e || '')).trim();
   if (code === 'PERMISSION_DENIED') {
-    return 'Permiso denegado (PERMISSION_DENIED). En Firebase → Realtime Database → Reglas debe haber .write: true en la ruta gym (no solo lectura). Publicá los cambios.';
+    return 'Permiso denegado (PERMISSION_DENIED). Iniciá sesión con un usuario de Firebase (Authentication) y publicá las reglas de la base (gym/data solo con auth).';
   }
   if (code === 'UNAVAILABLE') {
     return 'Servicio no disponible temporalmente. Reintentá en unos minutos.';
@@ -103,7 +103,30 @@ function normalizeData(data) {
   if (!data.actividades_alquiler) data.actividades_alquiler = [];
   if (!data.cobros_alquiler) data.cobros_alquiler = [];
   if (!data.gastos) data.gastos = [];
+  if (!Array.isArray(data.audit_log)) data.audit_log = [];
   return data;
+}
+
+const AUDIT_LOG_MAX = 200;
+
+/**
+ * Registro breve de acciones sensibles (últimas entradas recortadas).
+ * @param {object} data appData
+ * @param {{ accion: string, detalle?: string, actor?: string }} entry
+ */
+export function appendAuditLog(data, entry) {
+  if (!data) return;
+  if (!Array.isArray(data.audit_log)) data.audit_log = [];
+  const actor = entry.actor || 'sistema';
+  data.audit_log.push({
+    at: Date.now(),
+    accion: String(entry.accion || '').slice(0, 80),
+    detalle: entry.detalle != null ? String(entry.detalle).slice(0, 500) : '',
+    actor: String(actor).slice(0, 120)
+  });
+  if (data.audit_log.length > AUDIT_LOG_MAX) {
+    data.audit_log = data.audit_log.slice(-AUDIT_LOG_MAX);
+  }
 }
 
 /** Aplica el resultado fusionado al objeto appData en memoria (misma referencia). */
@@ -117,17 +140,6 @@ function applyMergedStateToData(target, merged) {
   for (const k of Object.keys(m)) {
     target[k] = m[k];
   }
-}
-
-function cuotaKey(c) {
-  if (c?.id) return 'id:' + c.id;
-  const f = (c.fecha || '').slice(0, 10);
-  const n = (c.nombre || '').trim();
-  const p = String(c.periodo || '');
-  const m = c.monto || 0;
-  const t = String(c.tipo || '');
-  const o = (c.observaciones || '').slice(0, 80);
-  return `leg:${f}|${n}|${p}|${m}|${t}|${o}`;
 }
 
 function ventaKey(v) {
@@ -223,13 +235,13 @@ function mergeClasesProfesorPreferIncoming(rArr, iArr) {
   return merged;
 }
 
-function mergeCuotasPreferIncoming(rArr, iArr) {
-  const keysIncoming = new Set((iArr || []).map(cuotaKey));
-  const out = [...(iArr || [])];
-  for (const c of rArr || []) {
-    if (!keysIncoming.has(cuotaKey(c))) out.push(c);
-  }
-  return out;
+/**
+ * Cuotas: el guardado del cliente es la lista completa (incluye borrados).
+ * No unir con la nube fila a fila: si no, un pago borrado localmente volvía a aparecer
+ * porque mergeCuotasPreferIncoming reinyectaba filas que seguían en Firebase.
+ */
+function mergeCuotasPreferIncoming(_rArr, iArr) {
+  return [...(iArr || [])];
 }
 
 function mergeStockPreferIncoming(rArr, iArr) {
@@ -505,6 +517,7 @@ function getEmptyData() {
     actividades_alquiler: [],
     cobros_alquiler: [],
     horario: [],
+    audit_log: [],
     config: {
       periodo_actual: getPeriodo15Actual(),
       periodo_dia_fin: 16,

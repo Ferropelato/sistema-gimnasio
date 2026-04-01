@@ -1,8 +1,10 @@
 {
   "rules": {
     "gym": {
-      ".read": true,
-      ".write": true
+      "data": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
     }
   }
 }

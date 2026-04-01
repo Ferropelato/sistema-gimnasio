@@ -139,10 +139,14 @@ export function getFechaUltimoPagoEfectivo(socio, cuotas) {
   let max = '';
   const fromSocio = (socio?.ultimo_pago || '').slice(0, 10);
   if (/^\d{4}-\d{2}-\d{2}$/.test(fromSocio)) max = fromSocio;
+  const sid = socio?.id;
   const nombreSocio = normNombreListado(socio?.nombre);
-  if (!nombreSocio) return max;
   for (const c of cuotas || []) {
-    if (normNombreListado(c.nombre) !== nombreSocio) continue;
+    if (c.socio_id) {
+      if (c.socio_id !== sid) continue;
+    } else {
+      if (!nombreSocio || normNombreListado(c.nombre) !== nombreSocio) continue;
+    }
     const f = (c.fecha || '').slice(0, 10);
     if (/^\d{4}-\d{2}-\d{2}$/.test(f) && (!max || f > max)) max = f;
   }

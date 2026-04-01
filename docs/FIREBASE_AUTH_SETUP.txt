@@ -1,0 +1,14 @@
+Center Gym — Firebase Authentication + reglas de la base
+==========================================================
+
+1) Firebase Console → Authentication → Comenzar → Email/contraseña → Habilitar.
+
+2) Crear al menos un usuario (pestaña Users → Agregar usuario) con el email y clave que usarán en el gimnasio.
+
+3) Publicar reglas de Realtime Database:
+   npm run deploy:rules
+   (o pegar manualmente database.rules.json en Firebase → Realtime Database → Reglas → Publicar)
+
+4) Sin el paso 1–3, la app mostrará PERMISSION_DENIED al leer/escribir gym/data.
+
+5) La API Express (/api/auth/login de Administración) es independiente: definir FINANZAS_CLAVE y SESSION_SECRET en el entorno del servidor (.env).
