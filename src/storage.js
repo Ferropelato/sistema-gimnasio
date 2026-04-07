@@ -32,7 +32,7 @@ function formatFirebaseError(e) {
   const code = e?.code || '';
   const msg = (e?.message || String(e || '')).trim();
   if (code === 'PERMISSION_DENIED') {
-    return 'Permiso denegado (PERMISSION_DENIED). Iniciá sesión con un usuario de Firebase (Authentication) y publicá las reglas de la base (gym/data solo con auth).';
+    return 'Permiso denegado (PERMISSION_DENIED). Revisá las reglas de Realtime Database en Firebase (gym/data debe permitir lectura/escritura).';
   }
   if (code === 'UNAVAILABLE') {
     return 'Servicio no disponible temporalmente. Reintentá en unos minutos.';

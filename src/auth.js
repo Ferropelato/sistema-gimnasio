@@ -1,10 +1,6 @@
 /**
- * Identidad para auditoría (Firebase Auth)
+ * Identidad para auditoría (sin login por usuario; acceso admin sigue en finanzas vía /api/auth)
  */
-import { auth } from './firebase.js';
-
 export function getAuthActor() {
-  const u = auth.currentUser;
-  if (!u) return 'sin-sesión';
-  return u.email || u.uid || 'usuario';
+  return 'usuario';
 }

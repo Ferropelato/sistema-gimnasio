@@ -5,8 +5,6 @@
 
 import { loadData, saveData, saveToLocalSync, getPeriodoActual, subscribeToDataUpdates, subscribeSyncStatus, pingFirebaseRead, getSyncState, appendAuditLog } from './storage.js';
 import { getAuthActor } from './auth.js';
-import { auth } from './firebase.js';
-import { onAuthStateChanged, signOut, setPersistence, browserLocalPersistence, signInWithEmailAndPassword } from 'firebase/auth';
 import * as fingerprint from './fingerprint.js';
 import { calcularSemaforo, formatMoney, formatDate, getRangoPeriodo15, fechaEnPeriodo15, diasDesdePago, diasRestantes, getPeriodoDesdeFecha, getPeriodoAnterior, calcularEdad, listarCumpleanosHoyYManana, getCategoriaSocioListado, getFechaUltimoPagoEfectivo, DIAS_INACTIVO_LISTADO } from './utils.js';
 import { isAdminAutenticado, setAdminAutenticado, refreshAuthFromServer, loginWithServer, filtrarPorPeriodo15, filtrarCuotasPorPeriodoResumen, getPeriodosDisponibles } from './finanzas.js';
@@ -3699,44 +3697,4 @@ function renderConfig(container, opts = {}) {
   });
 }
 
-setPersistence(auth, browserLocalPersistence).catch(() => {});
-
-document.getElementById('form-auth-login')?.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const errEl = document.getElementById('auth-error');
-  if (errEl) errEl.textContent = '';
-  const email = document.getElementById('auth-email')?.value?.trim();
-  const password = document.getElementById('auth-password')?.value;
-  try {
-    await signInWithEmailAndPassword(auth, email, password);
-  } catch (err) {
-    const code = err?.code || '';
-    if (errEl) {
-      errEl.textContent =
-        code === 'auth/invalid-credential' || code === 'auth/wrong-password' || code === 'auth/user-not-found'
-          ? 'Email o contraseña incorrectos.'
-          : (err.message || 'Error al iniciar sesión');
-    }
-  }
-});
-
-document.getElementById('btn-auth-logout')?.addEventListener('click', async () => {
-  await signOut(auth);
-  location.reload();
-});
-
-let startAppEjecutado = false;
-onAuthStateChanged(auth, async (user) => {
-  const gate = document.getElementById('auth-gate');
-  const appEl = document.getElementById('app');
-  if (!user) {
-    if (gate) gate.hidden = false;
-    if (appEl) appEl.hidden = true;
-    return;
-  }
-  if (gate) gate.hidden = true;
-  if (appEl) appEl.hidden = false;
-  if (startAppEjecutado) return;
-  startAppEjecutado = true;
-  await startApp();
-});
+void startApp().catch((err) => console.error('startApp', err));
